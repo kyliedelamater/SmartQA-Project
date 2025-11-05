@@ -28,6 +28,10 @@ try:
     # --- Use updated processors ---
     from .bert_processor import BertProcessor
     from .flan_t5_processor import FlanT5Processor
+    try:
+        from .hydra_client import HydraClient
+    except Exception:
+        HydraClient = None
     from database.neo4j_connector import Neo4jConnection
     from config import config # Import the global config instance
     from dotenv import load_dotenv
@@ -240,9 +244,24 @@ class KnowledgeQASystem:
         self.db = None
         self.bert = None
         self.t5 = None
-        self.kg_linker = None
-        self.is_initialized = False
-        self.max_workers = self.config.get("max_thread_workers", 2)  # Configurable thread pool size
+        self.hydra = None
+        self.hydra_system_prompt = self.config.get("hydra_system_prompt",
+            "You are a concise herbal knowledge assistant. When asked about compounds and plants, "
+            "list the most likely plants succinctly. If uncertain, provide best-known candidates."
+        )
+
+        try:
+            if self.config.get("enable_hydra", True) and HydraClient is not None:
+                self.hydra = HydraClient(
+                    model=self.config.get("hydra_model", "gemma3:12b")
+                    # no default_system_prompt here
+                )
+                logger.info("Hydra client initialized.")
+            else:
+                logger.info("Hydra disabled by config or HydraClient unavailable.")
+        except Exception as e:
+            logger.warning(f"Hydra client initialization failed: {e}")
+            self.hydra = None
 
         # Initialize components with enhanced error handling
         self._initialize_components()
@@ -320,7 +339,7 @@ class KnowledgeQASystem:
             "bert": False,
             "t5": False
         }
-
+        
         #INIT LINKER (BEGIN)
         try:
             if self.config.get("use_kg_score", False):
@@ -333,6 +352,7 @@ class KnowledgeQASystem:
             logger.warning(f"KG linker initialization failed: {e}")
             self.kg_linker = None
         #INIT LINKER (END)
+        
 
         # --- Database Connection ---
         # Use config object which should have loaded env vars
@@ -468,6 +488,20 @@ class KnowledgeQASystem:
         except Exception as e:
             logger.error(f"FlanT5Processor initialization failed: {e}", exc_info=True)
             self.t5 = None
+
+        # Hydra Client Initialization 
+        try:
+            if bool(self.config.get("enable_hydra", True)):
+                hydra_model = self.config.get("hydra_model", "gemma3:12b")
+                hydra_system = self.config.get("hydra_system_prompt",
+                    "You are a concise herbal knowledge assistant. If asked about compounds and plants, list likely plants succinctly.")
+                self.hydra = HydraClient(model=hydra_model, default_system_prompt=hydra_system)
+                logger.info(f"Hydra client initialized (model={hydra_model}).")
+            else:
+                logger.info("Hydra disabled by config.")
+        except Exception as e:
+            logger.warning(f"Hydra client initialization failed: {e}")
+            self.hydra = None
 
         # Set overall initialization status
         # Make T5 optional so the system can operate in degraded mode without NLG
@@ -1007,83 +1041,7 @@ class KnowledgeQASystem:
         else:
             logger.warning(f"No specific formatter mapped for intent '{intent}'. Using general explanation.")
             # Fallback: general explanation for unmapped intents
-            if self.t5 and hasattr(self.t5, 'generate_general_explanation'):
-                return self.t5.generate_general_explanation, dict(intent=intent, entities=entities, count=results_count)
-            else:
-                logger.error("T5 not available for general explanation fallback. Returning None, None.")
-                return None, None
-
-
-    def _generate_response(self, query_info, entities, processed_data, results_count, original_question):
-        """
-        Generates the natural language response using the appropriate T5 formatter.
-        Includes improved fallback logic.
-        """
-        intent = query_info.get('intent', 'unknown')
-        logger.debug(f"Generating response for intent: {intent}, Results count: {results_count}")
-
-        formatter_fn, args = self._get_formatter_and_args(intent, entities, processed_data, results_count)
-
-        if formatter_fn is None or args is None:
-             logger.error(f"Could not determine formatter function or arguments for intent '{intent}'. Returning fallback.")
-             # Use the improved fallback response function
-             return self._fallback_response(intent, entities, processed_data)
-
-        try:
-            # Call the selected formatter function with its arguments
-            logger.debug(f"Calling formatter: {getattr(formatter_fn, '__name__', 'N/A')} with args: {args.keys()}")
-            # 11125
-            if formatter_fn is None:
-                logger.error("Formatter function is None. Cannot generate response.")
-                return self._fallback_response(intent, entities, processed_data)
-            #
-
-            response = formatter_fn(**args)
-            
-            # 11125
-            # Ensure response is a non-empty string
-            if response is None:
-                logger.warning("Formatter returned None. Using fallback.")
-                response = self._fallback_response(intent, entities, processed_data)
-            elif not isinstance(response, str):
-                logger.warning(f"Formatter returned non-string type {type(response)}. Converting to string.")
-                response = str(response) if response else self._fallback_response(intent, entities, processed_data)
-            #
-
-            # --- Quality Check ---
-            # Check if the response is empty or seems like a template failure/placeholder response
-            min_response_length = 30 # Minimum characters for a response to be considered non-trivial
-            placeholder_phrases = ["Unknown Entity", "Unknown Method", "None listed in database.", "Please specify"] # Phrases indicating failed formatting
-
-            if not response or len(response.strip()) < min_response_length or any(phrase in response for phrase in placeholder_phrases):
-                 logger.warning(f"Formatter '{getattr(formatter_fn, '__name__', 'N/A')}' produced a short or potentially invalid response for intent '{intent}'. Response: '{response[:100]}...'")
-                 # If the primary formatter failed, attempt the more robust fallback
-                 response = self._fallback_response(intent, entities, processed_data)
-            else:
-                 logger.debug(f"Formatter '{getattr(formatter_fn, '__name__', 'N/A')}' generated response length: {len(response)}")
-
-
-            return response
-
-        except Exception as e:
-            logger.error(f"Formatter function '{getattr(formatter_fn, '__name__', 'N/A')}' failed for intent '{intent}': {e}", exc_info=True)
-            # Log args keys/types for debugging, avoid logging full data potentially
-            arg_summary = {k: type(v).__name__ for k, v in args.items()}
-            logger.error(f"Formatter arguments summary: {arg_summary}")
-
-            # --- Specific Fallback for Safety Intent ---
-            if intent == 'safety_info':
-                 plant_name = self._get_main_entity(entities) or "the requested plant"
-                 logger.warning("Safety info formatter failed. Providing specific safety fallback.")
-                 safety_fallback = f"I encountered an issue retrieving detailed safety specifics for **{plant_name}**. "
-                 safety_fallback += "However, it is crucial to exercise caution with any medicinal plant. "
-                 safety_fallback += "General risks can include unexpected side effects, allergic reactions, or interactions with medications. "
-                 # The enhance_response_with_cautions will add the full standard warning later.
-                 return safety_fallback
-            else:
-                 # Use the improved general fallback for other formatter errors
-                 logger.warning(f"Using general fallback response due to formatter error for intent '{intent}'.")
-                 return self._fallback_response(intent, entities, processed_data)
+            return self.t5.generate_general_explanation, dict(intent=intent, entities=entities, count=results_count)
 
 
     def _calculate_confidence(self, question: str, answer: str) -> float:
@@ -1144,6 +1102,146 @@ class KnowledgeQASystem:
                   entity_name = next((ent for ent in syn_dict.keys() if key.rstrip('s') in ent.lower()), None)
                   if entity_name: return entity_name # Return the original entity name
         return None
+
+    def _generate_response(self, query_info, entities, processed_data, results_count, original_question):
+        """
+        Generates the final answer. If hydra_mode == "always", Hydra authors the answer.
+        Otherwise uses local formatters with an optional Hydra fallback.
+        """
+        intent = query_info.get('intent', 'unknown')
+        logger.debug(f"Generating response for intent: {intent}, Results count: {results_count}")
+
+        def _build_hydra_prompt() -> str:
+            # Make a compact, helpful context for Hydra
+            ent_lines = []
+            for k in ("plants", "compounds", "conditions", "regions"):
+                vals = (entities or {}).get(k) or []
+                if vals:
+                    ent_lines.append(f"{k}: {', '.join(vals[:5])}")
+            ent_block = "\n".join(ent_lines) if ent_lines else "none"
+
+            # Include up to 3 top names from DB for grounding
+            names = []
+            for rec in (processed_data or [])[:3]:
+                if isinstance(rec, dict):
+                    for key in ("plant_name", "p_name", "name", "scientific_name"):
+                        v = rec.get(key)
+                        if isinstance(v, str) and v.strip():
+                            names.append(v.strip()); break
+            names_block = ", ".join(names) if names else "none"
+
+            return (
+                "User question:\n"
+                f"{original_question}\n\n"
+                "Detected intent:\n"
+                f"{intent}\n\n"
+                "Detected entities:\n"
+                f"{ent_block}\n\n"
+                "Database hints (top names if any):\n"
+                f"{names_block}\n\n"
+                "Answer directly and succinctly."
+            )
+
+        def _answer_via_hydra() -> str:
+            if not getattr(self, "hydra", None):
+                return ""
+            try:
+                prompt = _build_hydra_prompt()
+                sys_msg = self.config.get("hydra_system_prompt") or \
+                        "You are a concise herbal knowledge assistant."
+                temp = float(self.config.get("hydra_temperature", 0.4))
+                max_tok = int(self.config.get("hydra_max_tokens", 320))
+                text = self.hydra.simple_chat(prompt, system=sys_msg, temperature=temp, max_tokens=max_tok, stream=False)
+                return (text or "").strip()
+            except Exception as e:
+                logger.warning(f"Hydra answer failed: {e}")
+                return ""
+
+        # --- Hydra-first path ---
+        hydra_mode = (self.config.get("hydra_mode") or "fallback").lower()
+        if self.config.get("hydra_enable", False) and hydra_mode == "always":
+            text = _answer_via_hydra()
+            if text:
+                # still pass through T5 safety enhancer if available
+                if self.t5:
+                    try:
+                        text = self.t5.enhance_response_with_cautions(text)
+                    except Exception as e:
+                        logger.debug(f"T5 caution enhancement skipped: {e}")
+                return text
+            # if Hydra failed, fall through to local generation as a safety net
+
+        # --- Local generation (used when Hydra is off, or in fallback mode, or Hydra failed) ---
+        formatter_fn, args = self._get_formatter_and_args(intent, entities, processed_data, results_count)
+        if formatter_fn is None or args is None:
+            # If hydra_mode == fallback, try Hydra here before default fallback
+            if self.config.get("hydra_enable", False) and hydra_mode == "fallback":
+                text = _answer_via_hydra()
+                if text:
+                    if self.t5:
+                        try:
+                            text = self.t5.enhance_response_with_cautions(text)
+                        except Exception:
+                            pass
+                    return text
+            logger.error(f"Could not determine formatter/args for intent '{intent}'. Using local fallback.")
+            return self._fallback_response(intent, entities, processed_data)
+
+        try:
+            resp = formatter_fn(**args)
+
+            # Guard: ensure string
+            if resp is None or not isinstance(resp, str):
+                resp = "" if resp is None else str(resp)
+
+            # If result looks empty/negative and hydra_mode == fallback → ask Hydra to improve
+            neg_markers = ("i couldn't find", "could not find", "no specific", "no matching", "not listed", "no plants listed", "no results")
+            looks_negative = any(m in resp.lower() for m in neg_markers)
+            too_short = len(resp.strip()) < 30
+            placeholder_phrases = ("Unknown Entity", "Unknown Method", "None listed in database.", "Please specify")
+            looks_placeholder = any(p in resp for p in placeholder_phrases)
+
+            if self.config.get("hydra_enable", False) and hydra_mode == "fallback" and (looks_negative or looks_placeholder or too_short):
+                text = _answer_via_hydra()
+                if text:
+                    if self.t5:
+                        try:
+                            text = self.t5.enhance_response_with_cautions(text)
+                        except Exception:
+                            pass
+                    return text
+
+            # Normal path: enhance with cautions and return
+            if self.t5:
+                try:
+                    resp = self.t5.enhance_response_with_cautions(resp)
+                except Exception:
+                    pass
+            return resp
+
+        except Exception as e:
+            logger.error(f"Formatter failed for intent '{intent}': {e}", exc_info=True)
+            if intent == "safety_info":
+                plant_name = self._get_main_entity(entities) or "the requested plant"
+                return (
+                    f"I encountered an issue retrieving detailed safety specifics for **{plant_name}**. "
+                    "However, it is crucial to exercise caution with any medicinal plant. "
+                    "General risks can include unexpected side effects, allergic reactions, "
+                    "or interactions with medications. "
+                )
+            # Last resort: Hydra if in fallback mode, else local fallback
+            if self.config.get("hydra_enable", False) and hydra_mode == "fallback":
+                text = _answer_via_hydra()
+                if text:
+                    if self.t5:
+                        try:
+                            text = self.t5.enhance_response_with_cautions(text)
+                        except Exception:
+                            pass
+                    return text
+            return self._fallback_response(intent, entities, processed_data)
+
+
 
 
     def _create_error_response(self, error_message: str, question: Optional[str]=None) -> Dict[str, Any]:
