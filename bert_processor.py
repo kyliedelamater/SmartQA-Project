@@ -1,3 +1,4 @@
+#nlp/bert_processor.py
 import torch
 import re
 import logging
@@ -6,6 +7,7 @@ import os
 from thefuzz import process, fuzz # Use thefuzz instead of fuzzywuzzy
 import numpy as np
 from typing import List, Dict, Optional, Set, Any, Tuple, Union
+from .cypher_templates import CYPHER_TEMPLATES
 # Ensure this import path is correct relative to your project structure
 # If knowledge_graph_entity_linker is in the same directory (nlp):
 # from .knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
@@ -15,7 +17,12 @@ from typing import List, Dict, Optional, Set, Any, Tuple, Union
 # from knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
 # Assuming it's in the same directory for now:
 from nlp.knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
-
+from nlp.plants_list import plants, compounds, regions, conditions, common_names, scientific_names
+from nlp.keyword_lists import (
+    safety_info, plant_preparation, similar_plants, condition_plants,
+    plant_effects, compound_effects, plant_compounds, compound_plants,
+    region_plants, general_query
+)
 
 import torch.nn as nn
 import nltk
@@ -126,12 +133,42 @@ class BertProcessor:
         self.fuzzy_match_threshold = self.config.get("fuzzy_threshold", 80) # Configurable threshold
         self.region_fuzzy_match_threshold = self.config.get("region_fuzzy_threshold", 75) # Lower threshold for regions
         self._initialize_query_templates()
+        # lan added 
+        # Prefer external templates to avoid divergence:
+        self.query_templates = CYPHER_TEMPLATES
 
+
+        # lan added 11/1/25 
+        self.dt_classifier = None
+        self.last_intent_source = "ml"
+    
         # Initialize Lemmatizer
         self.lemmatizer = None
         self._initialize_lemmatizer()
 
+        self.cypher = CYPHER_TEMPLATES
+
         logger.info("BertProcessor (v6 - Improved) initialized successfully.")
+
+    # lan added 11/1/25 
+    def attach_intent_dt(self, dt) -> None:
+        """
+        Attach a SimpleIntentDecisionTable instance. knowledge_qa.py calls this.
+        """
+        self.dt_classifier = dt
+
+    def _norm(self, s: str) -> str:
+        return (s or "").strip().lower()
+
+    def _first(self, seq):
+        if not seq:
+            return None
+        for x in seq:
+            if isinstance(x, str) and x.strip():
+                return x.strip()
+        return None
+    # 11/1/25 lan added 
+
 
     def _initialize_lemmatizer(self):
         """Initializes the NLTK lemmatizer, attempting downloads if necessary."""
@@ -162,13 +199,15 @@ class BertProcessor:
     def _initialize_entity_lists(self):
         """Initializes base entity lists and KG-related attributes."""
         logger.debug("Initializing base entity lists.")
-        # Base lists provide a fallback if KG loading fails
-        self.base_conditions = {'inflammation', 'pain', 'arthritis', 'anxiety', 'insomnia', 'diabetes', 'depression', 'hypertension', 'infection', 'stress', 'digestive issues', 'digestion', 'respiratory problems', 'immune support', 'cold', 'flu', 'headache', 'migraine', 'nausea', 'vomiting', 'burns', 'wounds', 'cuts', 'joint pain', 'eczema', 'psoriasis', 'allergies', 'fatigue', 'memory issues', 'cough', 'fever', 'cystitis', 'diarrhea', 'constipation', 'spasm', 'ulcer', 'catarrh', 'indigestion', 'dyspepsia', 'swelling', 'ache', 'sleep disorder', 'stomach issues', 'high blood pressure', 'skin conditions', 'mood disorder', 'nerve pain'}
-        # Added 'ginger' and canonical 'st. john's wort'
-        self.base_plants = {'ginger', 'turmeric', 'garlic', 'echinacea', 'ginseng', 'aloe vera', 'chamomile', 'lavender', 'peppermint', 'valerian', "st. john's wort", 'milk thistle', 'ginkgo biloba', 'holy basil', 'ashwagandha', 'maca', 'elderberry', 'calendula', 'arnica', 'passionflower', 'lemon balm', 'kava', 'rosemary', 'thyme', 'sage', 'oregano', 'cinnamon', 'nettle', 'boldo', 'dandelion', 'burdock', 'licorice root', 'yarrow', 'feverfew', 'gotu kola', 'devil\'s claw', 'boswellia', 'cat\'s claw', 'balm of gilead'}
-        # Ensure 'gingerol' is here, not in plants
-        self.base_compounds = {'curcumin', 'allicin', 'gingerol', 'menthol', 'quercetin', 'hypericin', 'anthocyanins', 'polyphenols', 'alkaloids', 'flavonoids', 'tannins', 'terpenes', 'saponins', 'berberine', 'silymarin', 'salicylic acid', 'ginkgolides', 'apigenin', 'chamazulene', 'eugenol', 'thymol', 'curcuminoids', 'glycosides', 'acids', 'sterols', 'volatile oil', 'essential oil', 'lignans', 'resins', 'mucilage', 'oleanolic acid', 'ursolic acid'}
-        self.base_regions = {'europe', 'asia', 'africa', 'north america', 'south america', 'central america', 'mediterranean', 'india', 'china', 'amazon', 'andes', 'himalayas', 'australia', 'middle east', 'southeast asia', 'siberia', 'japan', 'korea', 'arabian peninsula', 'andean region'}
+        """The following are stored in SmartQA/nlp/plants_list.py"""
+        # Set list of conditions
+        self.base_conditions = set(conditions)
+        # Set list of plants
+        self.base_plants = set(plants).union(common_names).union(scientific_names)
+        # Set list of compounds
+        self.base_compounds = set(compounds)
+        # Set list of regions
+        self.base_regions = set(regions)
 
         # Initialize KG-related attributes (will be populated by _load_kg_data)
         self.entity_to_idx: Dict[str, int] = {}
@@ -676,7 +715,7 @@ class BertProcessor:
             return ''
         normalized = term.lower().strip()
         # Remove possessive 's
-        normalized = re.sub(r"['â€™]s$", "", normalized)
+        normalized = re.sub(r"['’]s$", "", normalized)
 
         # --- Specific Normalization Rules ---
         # Canonical form for St. John's Wort (ensure this matches DB population)
@@ -776,7 +815,7 @@ class BertProcessor:
         n-grams, fuzzy matching, and refinement. Returns entities sorted alphabetically.
         Includes prioritization logic (Plant > Compound).
         """
-        entities: Dict[str, Set[str]] = {'plants': set(), 'conditions': set(), 'compounds': set(), 'regions': set()}
+        entities: Dict[str, Set[str]] = {'plants': set(), 'conditions': set(), 'compounds': set(), 'regions': set(), 'keywords':set()}
         if not text or not text.strip():
             logger.warning("Input text is empty, skipping entity extraction.")
             return {k: [] for k in entities} # Return empty lists
@@ -813,15 +852,106 @@ class BertProcessor:
 
         # 3. Perform Fuzzy Matching against known entity lists
         # Ensure we pass sets to fuzzy match
-        matched_plants = self._fuzzy_match(unique_n_grams, self.all_known_plants, threshold=self.fuzzy_match_threshold)
+        matched_plants = self._fuzzy_match(unique_n_grams, self.all_known_plants, threshold=92)
         matched_conditions = self._fuzzy_match(unique_n_grams, self.all_known_conditions, threshold=self.fuzzy_match_threshold)
         matched_compounds = self._fuzzy_match(unique_n_grams, self.all_known_compounds, threshold=self.fuzzy_match_threshold)
-        matched_regions = self._fuzzy_match(unique_n_grams, self.all_known_regions, threshold=self.region_fuzzy_match_threshold)
+        #matched_regions = self._fuzzy_match(unique_n_grams, self.all_known_regions, threshold=self.region_fuzzy_match_threshold)
+        # --- Region Matching (refined logic) ---
+        region_matches = set()
 
+        # Normalize known regions once
+        known_regions_lower = {r.lower().strip() for r in self.all_known_regions}
+        text_lower = clean_text_for_processing.lower()
+
+        # 1️⃣ Direct substring or exact phrase match first
+        for region in known_regions_lower:
+            # exact phrase present
+            if f" {region} " in f" {text_lower} " or text_lower.endswith(region):
+                region_matches.add(region)
+
+        # 2️⃣ Fuzzy match only if not already captured, focusing on multi-word n-grams
+        if not region_matches:
+            for ngram in unique_n_grams:
+                if len(ngram.split()) >= 2:  # avoid single-word like "south"
+                    for region in known_regions_lower:
+                        # require both words appear and high similarity
+                        if all(w in region for w in ngram.split()) and fuzz.ratio(ngram, region) >= 90:
+                            region_matches.add(region)
+
+        # 3️⃣ Optional: context filter (helps ignore stray region words)
+        context_phrases = ("in ", "from ", "grow in ", "native to ", "found in ", "endemic to ", "cultivated in ")
+        if not any(cp in text_lower for cp in context_phrases):
+            # if question doesn’t mention a region context, clear the matches
+            region_matches.clear()
+        # Add final matches
+        entities['regions'].update(sorted(region_matches))     
         entities['plants'].update(matched_plants)
         entities['conditions'].update(matched_conditions)
         entities['compounds'].update(matched_compounds)
-        entities['regions'].update(matched_regions)
+        # entities['regions'].update(matched_regions)
+        
+        # --- Keyword extraction (dynamic and context-aware) ---
+
+        # 1️⃣ Normalize all keyword lists from keyword_lists.py
+        keyword_lists = {
+            "safety_info": set(s.lower().strip() for s in safety_info),
+            "plant_preparation": set(s.lower().strip() for s in plant_preparation),
+            "similar_plants": set(s.lower().strip() for s in similar_plants),
+            "condition_plants": set(s.lower().strip() for s in condition_plants),
+            "plant_effects": set(s.lower().strip() for s in plant_effects),
+            "compound_effects": set(s.lower().strip() for s in compound_effects),
+            "plant_compounds": set(s.lower().strip() for s in plant_compounds),
+            "compound_plants": set(s.lower().strip() for s in compound_plants),
+            "region_plants": set(s.lower().strip() for s in region_plants),
+            "general_query": set(s.lower().strip() for s in general_query),
+        }
+
+        # 2️⃣ Detect context keywords from user question to narrow relevant lists
+        context_cues = {
+            "safety_info": ["benefits of", "safe", "side effect", "adverse", "risk", "danger", "warning", "precaution", "contraindication", "pregnant", "toxicity"],
+            "plant_preparation": ["prepare", "make", "brew", "tincture", "infuse", "how to use", "recipe", "preparation", "extract", "steep", "boil"],
+            "condition_plants": ["treat", "help", "remedy", "alleviate", "good for", "benefit for", "aid for", "plants for", "herbs for"],
+            "plant_effects": ["effects of", "benefits of", "properties of", "what does", "therapeutic effect", "pharmacological effect", "impact on", "action of"],
+            "compound_effects": ["effects of", "benefits of", "properties of", "mechanism of action", "pharmacological activity", "how does", "what does", "biological activity", "chemical action", "mode of action", "metabolic effect"],
+            "compound_plants": ["contain", "contains", "found in", "source of", "which plants have", "what plants contain", "derived from", "plant source"],
+            "plant_compounds": ["compound", "ingredient", "chemical", "active ingredient", "phytochemical", "constituent", "bioactive", "what compounds", "compounds in"],
+            "region_plants": ["grow", "found in", "native to", "region", "area", "habitat", "from", "cultivated in", "endemic to"],
+            "similar_plants": ["similar", "alternative", "related", "compare", "vs", "versus", "like", "same family"],
+            "general_query": ["what is", "define", "describe", "tell me about", "information about", "overview of", "meaning of"]
+        }
+
+        # Get lowercase question text
+        question_lower = text.lower()
+
+        # Pick only keyword categories that are relevant for this question
+        relevant_cats = set()
+        for cat, cues in context_cues.items():
+            if any(cue in question_lower for cue in cues):
+                relevant_cats.add(cat)
+
+        # If none matched, default to general query
+        if not relevant_cats:
+            relevant_cats = {"general_query"}
+
+        # 3️⃣ Fuzzy matching logic
+        def fuzzy_match_keywords(ngrams, known_keywords, threshold=85):
+            matches = set()
+            for ngram in ngrams:
+                for kw in known_keywords:
+                    if ngram == kw:
+                        matches.add(kw)
+                    elif (kw in ngram or ngram in kw) and len(kw.split()) <= 3:
+                        matches.add(kw)
+                    elif fuzz.ratio(ngram, kw) >= threshold:
+                        matches.add(kw)
+            return matches
+
+        # 4️⃣ Collect matches only from relevant lists
+        for subcat in relevant_cats:
+            kw_set = keyword_lists[subcat]
+            matched_kws = fuzzy_match_keywords(unique_n_grams, kw_set, threshold=88)
+            for kw in matched_kws:
+                entities["keywords"].add(kw)
 
         # 4. Handle Specific Known Variations / Overrides (if fuzzy match misses)
         # Example: Ensure 'St. John's Wort' variations map correctly if needed
@@ -1004,6 +1134,9 @@ class BertProcessor:
             logger.error(f"Error loading projection layer weights from {path}: {e}", exc_info=True)
             # Keep the randomly initialized layer instead of setting to None
             return False
+    
+    
+
 
     # --- Intent Classification (v6 - Refined Priorities & Logic) ---
     def classify_question_intent(self, question: str) -> str:
@@ -1011,7 +1144,10 @@ class BertProcessor:
         Determines the primary intent using prioritized rules, keywords, and extracted entities.
         Maps to specific query templates. (Revised Priority Order)
         """
-        q_lower = question.lower()
+        # Use ML-only path
+        self.last_intent_source = "ml"
+
+
         # Use the improved extraction method
         entities = self._extract_entities(question)
         # Convert back to sets for easier checking, excluding empty lists
@@ -1021,19 +1157,23 @@ class BertProcessor:
 
         logger.debug(f"Classifying intent for: '{question[:100]}...' | Entities: {entities_sets}")
 
+        # --- Define q_lower BEFORE check_kws ---
+        q_lower = (question or "").lower()
+
         # --- Define Keywords for Intents ---
         intent_keywords = {
-            "safety_info": {"safe", "safety", "side effect", "adverse", "risk", "danger", "precaution", "contraindication", "interaction", "pregnant", "nursing", "warning", "caution"},
-            "plant_preparation": {"prepare", "preparation", "make", "brew", "infuse", "extract", "how to use", "recipe for", "decoction", "tincture", "infusion", "poultice"},
-            "similar_plants": {"similar to", "like", "related to", "alternative to", "substitute for", "compare to", "vs", "versus"},
-            "condition_plants": {"help with", "good for", "treat", "remedy for", "alleviate", "plants for", "herbs for", "benefit for", "aid for"}, # General condition keywords
-            "plant_effects": {"effects of", "benefits of", "properties of", "what does .* do"}, # Keywords for plant effects
-            "compound_effects": {"effects of compound", "compound .* effects", "properties of compound"}, # Keywords specific to compound effects
-            "plant_compounds": {"compounds in", "what compounds", "active ingredients in", "contains", "chemicals in"}, # For plants
-            "compound_plants": {"plants with", "which plants have", "source of", "find .* in", "plant source"}, # For compounds
-            "region_plants": {"grow in", "found in", "native to", "from", "region", "area", "location"},
-            "general_query": {"what is a", "define", "meaning of", "explain"},
+            "safety_info": set(safety_info),
+            "plant_preparation": set(plant_preparation),
+            "similar_plants": set(similar_plants),
+            "condition_plants": set(condition_plants),
+            "plant_effects": set(plant_effects),
+            "compound_effects": set(compound_effects),
+            "plant_compounds": set(plant_compounds),
+            "compound_plants": set(compound_plants),
+            "region_plants": set(region_plants),
+            "general_query": set(general_query),
         }
+        
         # Helper to check keywords
         def check_kws(intent_key):
              return any(kw in q_lower for kw in intent_keywords.get(intent_key, set()))
@@ -1178,7 +1318,7 @@ class BertProcessor:
             'valerian': ['valeriana officinalis', 'valerian root', 'garden heliotrope'],
             'passionflower': ['passiflora incarnata', 'maypop', 'passion flower'],
             "devil's claw": ['harpagophytum procumbens', 'grapple plant', 'wood spider'],
-            "cat's claw": ['uncaria tomentosa', 'uÃ±a de gato'],
+            "cat's claw": ['uncaria tomentosa', 'uña de gato'],
             'kava': ['piper methysticum', 'kava kava'],
             'ashwagandha': ['withania somnifera', 'indian ginseng', 'winter cherry'],
             # Compounds
@@ -1239,12 +1379,14 @@ class BertProcessor:
     def build_neo4j_query(self, question: str) -> Dict[str, Any]:
         """ Builds the Neo4j query dictionary based on intent and entities. (v6 - Verified) """
         extraction_result = self.extract_entities_and_intent(question)
-        intent = extraction_result['intent']
+        intent = extraction_result['intent']  
         entities = extraction_result['entities'] # This is now Dict[str, List[str]]
-
+                
         parameters = {}
         query_info = {'intent': intent, 'query': None, 'parameters': parameters}
         logger.debug(f"Building query for intent '{intent}' with entities: {entities}")
+
+        extraction_result = self.extract_entities_and_intent(question)
 
         # Helper to get first entity and normalize it
         def get_norm_entity(key):
@@ -1268,7 +1410,9 @@ class BertProcessor:
              return []
 
         try:
-            # --- Handle Intents (Match query templates) ---
+            # Handle Intents (Match query templates) 
+
+            """ Old version
             if intent == 'plant_info':
                 norm_name = get_norm_entity('plants')
                 if norm_name:
@@ -1285,7 +1429,7 @@ class BertProcessor:
                 else: logger.warning(f"Intent '{intent}' but no condition entity found.")
 
             elif intent == 'multi_condition_plants':
-                conditions = entities.get('conditions', [])
+                conditions = entities.get('conditions', []) 
                 if len(conditions) >= 2:
                     # Normalize the first two conditions found
                     parameters['norm_condition1'] = self._normalize_for_query(conditions[0])
@@ -1293,12 +1437,14 @@ class BertProcessor:
                     parameters['synonyms1'] = self.get_synonyms(conditions[0])
                     parameters['synonyms2'] = self.get_synonyms(conditions[1])
                     query_info['query'] = self.query_templates['multi_condition_plants']
+                    query_info['query'] = self.query_templates['multi_condition_plants']
                 else: logger.warning(f"Intent '{intent}' but less than 2 condition entities found.")
 
             elif intent == 'similar_plants':
                 norm_name = get_norm_entity('plants')
                 if norm_name:
-                    parameters['norm_entity_name'] = norm_name
+                    # parameters['norm_entity_name'] = norm_name
+                    parameters['plant'] = norm_name
                     query_info['query'] = self.query_templates['similar_plants']
                 else: logger.warning(f"Intent '{intent}' but no plant entity found.")
 
@@ -1380,6 +1526,127 @@ class BertProcessor:
                  else:
                       logger.warning(f"Intent '{intent}' but no keywords extracted.")
                       query_info['intent'] = 'keyword_search_empty' # Change intent if no keywords
+                      """
+            # New version
+            # --- Handle Intents (Match query templates) ---
+            if intent == 'plant_info':
+                norm_name = get_norm_entity('plants')
+                if norm_name:
+                    parameters['plant'] = norm_name
+                    query_info['query'] = self.query_templates['plant_info']
+                else:
+                    logger.warning(f"Intent '{intent}' but no plant entity found.")
+
+            elif intent == 'condition_plants':
+                norm_name = get_norm_entity('conditions')
+                if norm_name:
+                    parameters['condition'] = norm_name
+                    query_info['query'] = self.query_templates['condition_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but no condition entity found.")
+
+            elif intent == 'multi_condition_plants':
+                conditions = entities.get('conditions', [])
+                if len(conditions) >= 2:
+                    parameters['conditions'] = [
+                        self._normalize_for_query(conditions[0]),
+                        self._normalize_for_query(conditions[1]),
+                    ]
+                    query_info['query'] = self.query_templates['multi_condition_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but less than 2 condition entities found.")
+
+            elif intent == 'similar_plants':
+                norm_name = get_norm_entity('plants')
+                if norm_name:
+                    parameters['plant'] = norm_name
+                    query_info['query'] = self.query_templates['similar_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but no plant entity found.")
+
+            elif intent == 'compound_effects':
+                norm_name = get_norm_entity('compounds')
+                if norm_name:
+                    parameters['compound'] = norm_name
+                    query_info['query'] = self.query_templates['compound_effects']
+                else:
+                    logger.warning(f"Intent '{intent}' but no compound entity found.")
+
+            elif intent == 'plant_compounds':
+                norm_name = get_norm_entity('plants')
+                if norm_name:
+                    parameters['plant'] = norm_name
+                    query_info['query'] = self.query_templates['plant_compounds']
+                else:
+                    logger.warning(f"Intent '{intent}' but no plant entity found.")
+
+            elif intent == 'compound_plants':
+                norm_name = get_norm_entity('compounds')
+                if norm_name:
+                    parameters['compound'] = norm_name
+                    query_info['query'] = self.query_templates['compound_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but no compound entity found.")
+
+            elif intent == 'preparation_for_condition':
+                norm_name = get_norm_entity('conditions')
+                if norm_name:
+                    parameters['condition'] = norm_name
+                    query_info['query'] = self.query_templates['preparation_for_condition']
+                else:
+                    logger.warning(f"Intent '{intent}' but no condition entity found.")
+
+            elif intent == 'plant_preparation':
+                norm_name = get_norm_entity('plants')
+                if norm_name:
+                    parameters['plant'] = norm_name
+                    query_info['query'] = self.query_templates['plant_preparation']
+                else:
+                    logger.warning(f"Intent '{intent}' but no plant entity found.")
+
+            elif intent == 'region_plants':
+                norm_name = get_norm_entity('regions')
+                if norm_name:
+                    parameters['region'] = norm_name
+                    query_info['query'] = self.query_templates['region_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but no region entity found.")
+
+            elif intent == 'region_condition_plants':
+                norm_region = get_norm_entity('regions')
+                norm_condition = get_norm_entity('conditions')
+                if norm_region and norm_condition:
+                    parameters['region'] = norm_region
+                    parameters['condition'] = norm_condition
+                    query_info['query'] = self.query_templates['region_condition_plants']
+                else:
+                    logger.warning(f"Intent '{intent}' but missing region or condition entity.")
+
+            elif intent == 'safety_info':
+                norm_name = get_norm_entity('plants')
+                if norm_name:
+                    parameters['plant'] = norm_name
+                    query_info['query'] = self.query_templates['safety_info']
+                else:
+                    logger.warning(f"Intent '{intent}' but no plant entity found.")
+
+            elif intent == 'keyword_search':
+                 keywords = self.extract_keywords(question)
+                 if keywords:
+                      # Simple keyword search: Use the first keyword for CONTAINS check
+                      # More complex logic would involve multiple keywords, AND/OR, indexing
+                      # Normalize the keyword for the query
+                      parameters['keyword'] = self._normalize_for_query(keywords[0])
+                      if 'keyword_search' in self.query_templates:
+                           query_info['query'] = self.query_templates['keyword_search']
+                      else:
+                           logger.warning("Keyword search query template missing.")
+                           query_info['query'] = None
+                           query_info['intent'] = 'keyword_search_empty' # Fallback intent
+                 else:
+                      logger.warning(f"Intent '{intent}' but no keywords extracted.")
+                      query_info['intent'] = 'keyword_search_empty' # Change intent if no keywords
+
 
             # Handle intents that don't need a query
             elif intent in ['general_query', 'keyword_search_empty', 'error', 'unknown']:
@@ -1452,6 +1719,39 @@ class BertProcessor:
          except Exception as e:
               logger.error(f"Error generating BERT embedding for text '{text[:50]}...': {e}", exc_info=True)
               return None
+    def get_plant_from_query(self, query: str, all_plants: list, plant_synonyms: dict = None, threshold: float = 0.7) -> Optional[str]:
+        if not query or not all_plants:
+            return None
+
+        query_clean = re.sub(r'\W+', ' ', query.lower()).strip()
+    
+    # 1️⃣ Check synonyms first (quick exact match)
+        if plant_synonyms:
+            for plant, syns in plant_synonyms.items():
+                all_names = [plant.lower()] + [s.lower() for s in syns]
+                if any(n in query_clean for n in all_names):
+                    return plant
+
+    # 2️⃣ Exact match in canonical names
+        for plant in all_plants:
+            plant_clean = re.sub(r'\W+', ' ', plant.lower()).strip()
+            if plant_clean in query_clean or query_clean in plant_clean:
+                return plant
+
+    # 3️⃣ Fuzzy match using BERT embeddings
+        try:
+            query_emb = self.bert_model.encode(query, convert_to_tensor=True)
+            plant_embs = self.bert_model.encode(all_plants, convert_to_tensor=True)
+            cos_scores = util.cos_sim(query_emb, plant_embs)[0]
+            best_idx = cos_scores.argmax()
+            best_score = cos_scores[best_idx].item()
+            if best_score >= threshold:
+                return all_plants[best_idx]
+        except Exception as e:
+            logger.warning(f"BERT fuzzy matching failed: {e}")
+
+    # 4️⃣ No match found
+        return None
 
     def get_answer_confidence(self, question: str, answer: str) -> float:
          """
