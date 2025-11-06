@@ -646,7 +646,6 @@ class KnowledgeQASystem:
                 response_data['structured_data_sample'] = "No results returned from database query."
                 logger.debug("No results to process.")
 
-
             # --- STEP 4: Generate Natural Language Response ---
             logger.debug("Step 4: Generating natural language response...")
             try:
@@ -772,20 +771,9 @@ class KnowledgeQASystem:
                     "similar", "similar to", "substitute", "substitutes",
                     "replacement", "replacements", "like"
                 }
-                for k in ("plants", "conditions", "compounds", "regions"):
+                for k in ("plants", "conditions", "compounds", "regions", "keywords"):
                     vals = entities.get(k) or []
                     entities[k] = [v for v in vals if v and str(v).strip().lower() not in STOP_PHRASES]
-
-            # --- Extract semantic categories (keywords) using BERT embeddings ---
-            try:
-                if hasattr(self.bert, "detect_categories") and callable(self.bert.detect_categories):
-                    detected_keywords = self.bert.detect_categories(question)
-                    entities['keywords'] = [k.lower() for k in detected_keywords] if detected_keywords else []
-                else:
-                    entities['keywords'] = []
-            except Exception as e:
-                logger.warning(f"Keyword extraction failed: {e}")
-                entities['keywords'] = []
 
             # --- Determine intent ---
             pred_intent = None

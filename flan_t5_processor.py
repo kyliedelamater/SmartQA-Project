@@ -336,9 +336,9 @@ class FlanT5Processor:
 
         if len(cleaned_items) > max_items:
             display_items = cleaned_items[:max_items]
-            return "\n".join(f"• {item}" for item in display_items) + f"\n• ... (and {len(cleaned_items) - max_items} more)"
+            return "\n".join(f"• {item.capitalize()}" for item in display_items) + f"\n• ... (and {len(cleaned_items) - max_items} more)"
         else:
-            return "\n".join(f"• {item}" for item in cleaned_items)
+            return "\n".join(f"• {item.capitalize()}" for item in cleaned_items)
 
     #kylie added
     def _format_list_capitalize(self, items: List[str]) -> str:
@@ -371,83 +371,83 @@ class FlanT5Processor:
 
     def format_plant_info(self, plant_data: dict, entities: dict) -> str:
         """
-        Creates a comprehensive response about a medicinal plant. (Improved Handling)
-        Includes all available information in a structured format.
+        Creates a comprehensive response about a medicinal plant.
+        Dynamically tailors sections based on extracted keywords (e.g. 'benefits', 'compounds', 'side effects').
         """
         if not plant_data or not plant_data.get('name'):
             queried_plant = self._get_primary_entity(entities, ['plants'])
             return self._format_no_data_response("plant", queried_plant)
 
-        # Extract all data fields safely
+        # Extract user keywords
+        keywords = [k.lower() for k in entities.get('keywords', [])]
+        logger.info(f"[T5 Debug] Keywords for plant_info: {keywords}")
+
+        # Helper to check if any keyword matches a cue group
+        def has_kw(*terms):
+            return any(any(t in kw for t in terms) for kw in keywords)
+
+        # Extract plant fields safely
         name = plant_data.get('name', 'Unknown Plant')
         sci_name = plant_data.get('scientific_name')
         family = plant_data.get('family')
         morphology = plant_data.get('morphology')
         distribution = plant_data.get('distribution')
-        # Clean lists immediately
         effects = [e for e in plant_data.get('effects', []) if e and str(e).strip()]
         compounds = [c for c in plant_data.get('compounds', []) if c and str(c).strip()]
         preparations = [p for p in plant_data.get('preparations', []) if p and str(p).strip()]
         side_effects = [s for s in plant_data.get('side_effects', []) if s and str(s).strip()]
         traditional_uses = [t for t in plant_data.get('traditional_uses', []) if t and str(t).strip()]
-        contraindications = [c for c in plant_data.get('contraindications', []) if c and str(c).strip()] # Added
+        contraindications = [c for c in plant_data.get('contraindications', []) if c and str(c).strip()]
+
+        # Decide which sections to show
+        show_effects = has_kw("benefit", "effect", "property", "use")
+        show_general = not (show_effects)
 
         sections = []
+            
+        # --- Effects/benefits
+        if show_effects and effects:
+            sections.append(f"\n**Medicinal Benefits & Effects of {name.title()}:**\n{self._format_list_bullets(effects)}")
 
-        # Introduction
-        intro = f"**{name}**"
-        if sci_name: intro += f" ({sci_name})"
-        if family: intro += f" is a medicinal plant from the {family} family."
-        else: intro += " is a notable medicinal plant."
-        sections.append(intro)
+        # --- Fallback: show all sections if no keywords guide it
+        if show_general:
+            # --- Intro section ---
+            intro_parts = [f"**{name}**"]
+            if sci_name:
+                intro_parts[-1] += f" ({sci_name})"
+            intro_parts.append(
+                f" is a medicinal plant from the {family} family."
+                if family else " is a notable medicinal plant."
+            )
+            sections.append("".join(intro_parts))
 
-        # Physical description
-        desc_section = ""
-        if morphology: desc_section += f"\n**Description:** {morphology}"
-        if distribution: desc_section += f"\n**Distribution:** {distribution}"
-        if desc_section: sections.append(desc_section.strip())
+            # --- Description section ---
+            desc_parts = []
+            if morphology:
+                desc_parts.append(f"**Description:** {morphology}")
+            if distribution:
+                desc_parts.append(f"**Distribution:** {distribution}")
+            if desc_parts:
+                sections.append("\n".join(desc_parts))
 
-        # Medicinal properties
-        if effects:
-            sections.append(f"\n**Medicinal Properties & Effects:**\n{self._format_list_capitalize(effects)}")
+            # --- Info sections defined as label → data mapping ---
+            info_map = {
+                "Medicinal Properties & Effects": effects,
+                "Traditional Uses": traditional_uses,
+                "Key Active Compounds": compounds,
+                "Preparation Methods": preparations,
+            }
 
-        # Traditional uses
-        if traditional_uses:
-            sections.append(f"\n**Traditional Uses:**\n{self._format_list_capitalize(traditional_uses)}")
+            for title, data in info_map.items():
+                if data:
+                    sections.append(f"\n**{title}:**\n{self._format_list_capitalize(data)}")
 
-        # Active compounds
-        if compounds:
-            sections.append(f"\n**Key Active Compounds:**\n{self._format_list_capitalize(compounds)}")
-
-        # Preparation methods
-        if preparations:
-            sections.append(f"\n**Traditional Preparation Methods:**\n{self._format_list_capitalize(preparations)}")
-
-        # Safety information
-        safety_section = "\n**Safety Considerations:**"
-
-        cleaned_potential_side_effects = []
-        if side_effects:
-            cleaned_potential_side_effects = [self._clean_sentence(s) for s in side_effects]
-
-        if cleaned_potential_side_effects:
-            safety_section += f"\n*Potential Side Effects:*\n{self._format_list_bullets(cleaned_potential_side_effects)}"
-        else:
-            bullet = "\u2022"
-            safety_section += f"\n*Potential Side Effects:*\n{bullet} Specific side effects are not listed in the database for {name}, but caution is always advised."
-
-        if contraindications:
-             safety_section += f"\n*Contraindications (Should Avoid):*\n{self._format_list(contraindications)}"
-
-        safety_section += "\n\n*General Precautions:*"
-        safety_section += "\n• Always start with a low dose to assess tolerance."
-        safety_section += "\n• Ensure correct plant identification and use high-quality sources."
-        safety_section += "\n• Be aware of potential interactions with medications (consult your doctor)."
-        safety_section += "\n• Use with caution if pregnant, nursing, or have pre-existing health conditions."
-        sections.append(safety_section)
+            # --- Side effects section ---
+            if side_effects:
+                cleaned = [self._clean_sentence(s) for s in side_effects]
+                sections.append(f"\n**Known Side Effects:**\n{self._format_list_bullets(cleaned)}")
 
         return "\n".join(sections)
-
 
     def format_condition_plants(self, condition: str, plants_data: list, entities: dict) -> str:
         """
@@ -514,12 +514,12 @@ class FlanT5Processor:
 
         # Build response
         sections = []
-        intro = f"Here's information on medicinal plants traditionally associated with **{condition}**:"
+        intro = f"Here's information on medicinal plants used to treat **{condition}**:"
         sections.append(intro)
 
         # Primary plants section
         if primary_plants:
-            sections.append("\n**Plants Primarily Used:**")
+            sections.append("\n**Plants Used:**")
 
             #Randomly choose 10 plants from database relating to condition
             selected_plants = random.sample(
@@ -529,9 +529,9 @@ class FlanT5Processor:
 
             selected_plants.sort(key=lambda p: p['name'])
             for plant in selected_plants:
-                plant_text = f"\n• **{plant['name']}**"
-                if plant['scientific_name']: plant_text += f" ({plant['scientific_name']})"
-                if plant['effects_sample']: plant_text += f"\n  Known effects include: {', '.join(plant['effects_sample'])}"
+                plant_text = f"• **{plant['name']}**"
+                if plant['scientific_name']: plant_text += f" (*{plant['scientific_name']}*)\n"
+                #if plant['effects_sample']: plant_text += f"\n  Known effects include: {', '.join(plant['effects_sample'])}"
                 sections.append(plant_text)
         else:
              sections.append(f"\nNo plants specifically listed for directly treating '{condition}' were found in the database based on the available effect descriptions. However, some plants may offer supportive benefits.")
@@ -553,7 +553,7 @@ class FlanT5Processor:
         guidelines += "\n• Start with a single plant and a low dose to assess your response."
         guidelines += "\n• Follow traditional or expert-recommended preparation methods."
         guidelines += "\n• Ensure proper identification and use high-quality plant sources."
-        sections.append(guidelines)
+        #sections.append(guidelines)
 
         # Safety note is added globally by enhance_response_with_cautions
 
@@ -658,50 +658,75 @@ class FlanT5Processor:
         # Safety note added globally
 
         return "\n".join(sections)
+        
+    def _debug_keywords_section(self, entities, label="Detected keywords"):
+        kws = [k for k in (entities or {}).get("keywords", []) if k]
+        return f"\n\n_{label}:_ " + ", ".join(kws) if kws else ""
 
     def format_safety_info(self, plant_name: str, safety_data: dict, context: dict, entities: dict) -> str:
         """
-        Generates a safety/benefit report for a plant, showing only detected categories.
-        Supports side effects, benefits, interactions, and other categories detected by BERT.
+        Generates a safety/benefit/interactions report for a plant.
+        Dynamically filters sections based on extracted keywords from BERT.
         """
         if not plant_name:
             return "Please specify the plant you want safety information for."
 
         safety_data = safety_data or {}
-        context_text = context.get('text', '') if context else ""
+        keywords = [k.lower() for k in entities.get("keywords", [])]
+        logger.info(f"[T5 Debug] Keywords for safety_info: {keywords}")
 
-        # Detect categories from context (BERT or keywords)
-        detected_categories = self.detect_categories(context_text)
+        # Helper to check keyword intent
+        def has_kw(*terms):
+            return any(any(t in kw for t in terms) for kw in keywords)
 
-        # Map possible categories to safety_data keys
-        category_map = {
-            "side effects": "side_effects",
-            "interactions": "interactions",
-            "benefits": "benefits",  # your 'effects' key is used for benefits
-            "contraindications": "contraindications"
-        }
+        # --- Decide which categories to display ---
+        show_side_effects = has_kw("side effect", "adverse", "risk", "danger", "toxicity", "caution", "warning")
+        show_interactions = has_kw("interaction", "combine", "mix", "drug", "medication")
+        show_contraindications = has_kw("contraindication", "avoid", "pregnant", "nursing", "not use", "should not")
+        show_benefits = has_kw("benefit", "effect", "use", "property", "helps", "good for")
+        show_general = not (show_side_effects or show_interactions or show_contraindications or show_benefits)
+
+        # --- Extract fields ---
+        side_effects = [s for s in safety_data.get("side_effects", []) if s and str(s).strip()]
+        interactions = [i for i in safety_data.get("interactions", []) if i and str(i).strip()]
+        contraindications = [c for c in safety_data.get("contraindications", []) if c and str(c).strip()]
+        benefits = [b for b in safety_data.get("benefits", []) if b and str(b).strip()]  # optional
 
         sections = []
 
-        for cat in ["side effects", "benefits", "interactions", "contraindications"]:
-            # Only include if detected by BERT OR if there is data
-            data_key = category_map[cat]
-            items = [str(i).strip() for i in safety_data.get(data_key, []) if i and str(i).strip()]
-            if items or cat in detected_categories:
-                header = f"**{cat.title()} for {plant_name.title()}:**"
-                if items:
-                    formatted_items = self._format_list_bullets([self._clean_sentence(i) for i in items])
-                else:
-                    formatted_items = f"• No {cat} information is listed in the database, but caution is advised."
-                sections.append(f"{header}\n{formatted_items}")
+        # --- Side Effects ---
+        if show_side_effects or show_general:
+            header = f"**Side Effects of {plant_name.title()}:**"
+            if side_effects:
+                formatted = self._format_list_bullets([self._clean_sentence(s) for s in side_effects])
+            else:
+                formatted = "• No specific side effects listed, but caution is advised."
+            sections.append(f"{header}\n{formatted}")
 
+        # --- Interactions ---
+        if show_interactions or show_general:
+            header = f"**Known Interactions for {plant_name.title()}:**"
+            if interactions:
+                formatted = self._format_list_bullets([self._clean_sentence(i) for i in interactions])
+            else:
+                formatted = "• No known interactions recorded, but consult a healthcare provider before combining with medications."
+            sections.append(f"{header}\n{formatted}")
+
+        # --- Contraindications ---
+        if show_contraindications or show_general:
+            header = f"**Contraindications (When to Avoid) for {plant_name.title()}:**"
+            if contraindications:
+                formatted = self._format_list_bullets([self._clean_sentence(c) for c in contraindications])
+            else:
+                formatted = "• No specific contraindications listed, but use caution during pregnancy, nursing, or with chronic conditions."
+            sections.append(f"{header}\n{formatted}")
+
+        # --- If no sections built ---
         if not sections:
-            # Fallback message
             return (f"Safety information for {plant_name.title()} is limited in the database. "
                     "Always monitor for unusual reactions and consult a qualified healthcare professional before use.")
 
         return "\n\n".join(sections)
-
 
     def format_compound_effects(self, compound_name: str, compound_data: dict, entities: dict) -> str:
         """
@@ -776,88 +801,78 @@ class FlanT5Processor:
         Includes concentration information and practical uses.
         """
         if not compound_name:
-             return "Please specify the compound you are interested in."
+            return "Please specify the compound you are interested in."
         if not results:
-            # Check if the compound itself was recognized but no plants found
             compound_synonyms = entities.get('_synonyms', {}).get(compound_name, [compound_name])
-            # Check if the compound or its synonyms were in the original entity list
             if any(c in entities.get('compounds', []) for c in compound_synonyms):
-                 return f"While **{compound_name}** is a known compound, I couldn't find specific plants listed as containing it in the database."
+                return f"While **{compound_name}** is a known compound, I couldn't find specific plants listed as containing it in the database."
             else:
-                 return self._format_no_data_response("compound", compound_name)
+                return self._format_no_data_response("compound", compound_name)
 
+        # ---normalize record shape ---
+        normalized_results = []
+        for r in results:
+            # Handle both query formats: some return a list of plants, others one per record
+            plants_field = r.get("found_in_plants") or r.get("plant_name") or []
+            if isinstance(plants_field, list):
+                for plant in plants_field:
+                    normalized_results.append({
+                        "plant_name": plant,
+                        "scientific_name": r.get("scientific_name"),
+                        "effects": r.get("effects", []),
+                        "concentration": r.get("concentration"),
+                        "preparations": r.get("preparations", [])
+                    })
+            else:
+                normalized_results.append({
+                    "plant_name": plants_field,
+                    "scientific_name": r.get("scientific_name"),
+                    "effects": r.get("effects", []),
+                    "concentration": r.get("concentration"),
+                    "preparations": r.get("preparations", [])
+                })
 
-        # Organize plant data - deduplicate and aggregate effects
+        # --- Aggregate plant data ---
         plant_details = {}
         all_effects = set()
 
-        for result in results:
-            plant_name = result.get('plant_name')
-            if not plant_name or not str(plant_name).strip(): continue # Skip if name is missing
+        for result in normalized_results:
+            plant_name = result.get("plant_name")
+            if not plant_name or not str(plant_name).strip():
+                continue
             plant_name = str(plant_name).strip()
 
             if plant_name not in plant_details:
                 plant_details[plant_name] = {
-                    'scientific_name': result.get('scientific_name'),
-                    'effects': set(),
-                    'concentration': result.get('concentration'), # Assuming this might exist
-                    'preparations': result.get('preparations', []) # Assuming this might exist
+                    "scientific_name": result.get("scientific_name"),
+                    "effects": set(),
+                    "concentration": result.get("concentration"),
+                    "preparations": result.get("preparations", [])
                 }
 
-            # Aggregate effects
-            effects = result.get('effects', [])
+            effects = result.get("effects", [])
             if isinstance(effects, list):
-                current_effects = {str(e).strip() for e in effects if e and str(e).strip()}
-                plant_details[plant_name]['effects'].update(current_effects)
-                all_effects.update(current_effects)
-            elif isinstance(effects, str) and effects.strip(): # Handle single effect string
-                 plant_details[plant_name]['effects'].add(effects.strip())
-                 all_effects.add(effects.strip())
+                clean = {str(e).strip() for e in effects if e and str(e).strip()}
+                plant_details[plant_name]["effects"].update(clean)
+                all_effects.update(clean)
+            elif isinstance(effects, str) and effects.strip():
+                plant_details[plant_name]["effects"].add(effects.strip())
+                all_effects.add(effects.strip())
 
+        # --- Build response ---
+        if not plant_details:
+            return f"I couldn't find specific plants listed as containing **{compound_name.title()}** in the database."
 
-        # Build response
-        sections = []
-        intro = f"Here are medicinal plants known to contain the compound **{compound_name.title()}**:"
-        sections.append(intro)
-
-        # List all plants found
+        sections = [f"Here are medicinal plants known to contain the compound **{compound_name.title()}**:"]
         sections.append(f"\n**Plants Containing {compound_name.title()}:**")
-        if not plant_details: # Should not happen if results existed, but check anyway
-             return f"I couldn't find specific plants listed as containing **{compound_name.title()}** in the database."
 
         for name in sorted(plant_details.keys()):
             details = plant_details[name]
-            line = f"\n• **{name}**"
-            if details['scientific_name']: line += f" ({details['scientific_name']})"
-            # Show associated effects concisely
-            if details['effects']: line += f"\n  *Associated Effects:* {', '.join(sorted(list(details['effects']))[:3])}" # Limit shown effects
-            # Add concentration/prep info if available
-            if details['concentration']: line += f"\n  *Concentration Info:* {details['concentration']}"
-            if details['preparations'] and isinstance(details['preparations'], list) and any(p for p in details['preparations']):
-                 line += f"\n  *Common Preparations:* {self._format_list(details['preparations'], max_items=3)}"
+            line = f"• {name}"
             sections.append(line)
 
-        # Group by common therapeutic effects (optional, can be complex)
-        # Let's skip grouping by effect for now to keep it simpler and less prone to errors.
-        # If needed later, requires careful aggregation.
-
-        # Practical information
-        practical = f"\n**Key Points About {compound_name.title()} in Plants:**"
-        practical += f"\n• The concentration of {compound_name.title()} varies significantly between plants, plant parts, and growing conditions."
-        practical += "\n• Preparation methods (e.g., infusion, decoction, tincture) affect how much of the compound is extracted."
-        practical += "\n• The overall effect of the plant comes from the synergy of all its compounds, not just one."
-        sections.append(practical)
-
-        # Usage guidelines
-        guidelines = "\n**Usage Considerations:**"
-        guidelines += "\n• Choose plants based on the full range of desired effects and traditional uses, not just the presence of one compound."
-        guidelines += "\n• Follow recommended preparation methods for the specific plant being used."
-        guidelines += "\n• Consider individual sensitivities and potential interactions."
-        sections.append(guidelines)
-
-        # Safety note added globally
-
         return "\n".join(sections)
+
 
     def generate_general_explanation(self, intent: str, entities: Dict[str, List[str]], count: int) -> str:
         """
@@ -928,18 +943,20 @@ class FlanT5Processor:
 
         # Build response
         sections = []
-        intro = f"Here are some plants that share similar **therapeutic effects** with **{target_plant.title()}**, based on available data:"
+        intro = f"Here are some plants that share similar **therapeutic effects** with **{target_plant.title()}**:"
         sections.append(intro)
 
         # List similar plants, potentially sorted by similarity score
         sorted_plants = sorted(similar_plants_info.items(), key=lambda item: item[1]['similarity_score'], reverse=True)
+        
+        display_plants = random.sample(sorted_plants, min(10, len(sorted_plants)))
 
         sections.append("\n**Similar Plants:**")
-        for name, info in sorted_plants:
-            line = f"\n• **{name}**"
-            if info['scientific_name']: line += f" ({info['scientific_name']})"
+        for name, info in display_plants:
+            line = f"• **{name}**"
+            if info['scientific_name']: line += f" (*{info['scientific_name']}*)"
             if info['shared_effects']:
-                line += f"\n  *Shared Effects Include:* {', '.join(info['shared_effects'][:3])}" # Limit displayed effects
+                line += f"\n  *Shared Effects Include:* {', '.join(info['shared_effects'][:3])}\n" # Limit displayed effects
             # Could add similarity score if meaningful: line += f" (Similarity Score: {info['similarity_score']})"
             sections.append(line)
 
@@ -948,14 +965,14 @@ class FlanT5Processor:
         differences += f"\n• While sharing some effects, these plants have unique chemical profiles and other distinct properties not shared with {target_plant.title()}."
         differences += "\n• Potency, optimal preparation methods, and safety profiles (side effects, interactions) can differ significantly."
         differences += "\n• Traditional uses might vary even if some effects overlap."
-        sections.append(differences)
+       # sections.append(differences)
 
         # Selection guidelines
         guidelines = f"\n**Guidelines for Choosing:**"
         guidelines += "\n• Base your choice on your specific health goals and the *full* profile of the plant, not just the overlap."
         guidelines += "\n• Consider availability, ease of preparation, and your individual sensitivities."
         guidelines += f"\n• Research each plant individually, including its specific safety information, before use."
-        sections.append(guidelines)
+        #sections.append(guidelines)
 
         # Safety note added globally
 
@@ -1009,7 +1026,7 @@ class FlanT5Processor:
 
         for method_name in sorted(methods.keys()):
             details = methods[method_name]
-            line = f"• **{method_name.capitalize()}**"
+            line = f"• {method_name.capitalize()}"
             if details['description'] and str(details['description']).strip():
                  line += f": {str(details['description']).strip()}"
             # Display example plants if available
@@ -1034,7 +1051,7 @@ class FlanT5Processor:
         selection += "\n• The best method depends on the specific plant, the desired effects, and the compounds being targeted."
         selection += "\n• Infusions (teas) are common for leaves and flowers; decoctions (simmering) for roots and barks; tinctures (alcohol extraction) for broader compound extraction."
         selection += "\n• Consult reliable herbal resources or practitioners for guidance specific to the plant or condition."
-        sections.append(selection)
+        #sections.append(selection)
 
         # Safety note added globally
 
@@ -1130,17 +1147,17 @@ class FlanT5Processor:
             found_compounds = True
 
             effects = [e for e in compound_info.get('associated_effects', []) if e and str(e).strip()]
-            line = f"\n• **{cname.title()}**"
+            line = f"• **{cname.title()}**"
             if effects:
-                line += f"\n  *Associated Effects:* {self._format_list(effects[:5])}" # Limit effects shown
+                line += f"\n  *Associated Effects:* {self._format_list(effects[:3])}\n" # Limit effects shown
             else:
                  line += "\n  *Associated Effects:* Specific effects not detailed in database."
             sections.append(line)
 
         if not found_compounds:
              return f"I couldn't find specific active compounds listed in the database for **{plant_name}** after processing."
-
-        sections.append(f"\n\n**Note:** The overall effect of {plant_name.title()} comes from the complex interaction of many compounds.")
+ 
+        #sections.append(f"**Note:** The overall effect of {plant_name.title()} comes from the complex interaction of many compounds.")
         # Safety note added globally
         return "\n".join(sections)
 
@@ -1163,59 +1180,81 @@ class FlanT5Processor:
         logger.debug(f"Delegating format_plant_preparation for '{plant_name}' to format_preparation_methods.")
         return self.format_preparation_methods(target_entity=plant_name, prep_data=preparations_data, is_condition_query=False, entities=entities)
 
-
     def format_region_plants(self, region: str, plants_data: list, entities: dict = None) -> str:
         """
-        Generates a response about plants found in a specific region. (Improved Formatting & Direct Formatting)
+        Generates a concise response about plants found in a specific region.
+        Randomly selects up to 10 plants, then lists them alphabetically.
         """
         if not region:
             return "Please specify the region you are interested in."
         if not plants_data:
-            return f"I couldn't find specific medicinal plants listed as primarily growing in the **{region}** region in the database. This doesn't mean the region lacks medicinal flora, only that it's not detailed in my current data."
+            return (
+                f"I couldn't find specific medicinal plants listed as primarily growing in the **{region}** region "
+                "in the database. This doesn't mean the region lacks medicinal flora, only that it's not detailed in my current data."
+            )
 
-        plant_lines = []
-        mentioned = set()
+        # --- Collect and clean unique plants ---
+        plant_info = {}
         for plant in plants_data:
-            # Prioritize specific keys if available
             name = plant.get('plant_name') or plant.get('name')
-            if not name or not str(name).strip(): continue
-            name = str(name).strip()
-
-            # Avoid duplicates based on lowercase name
-            name_lower = name.lower()
-            if name_lower in mentioned:
+            if not name or not str(name).strip():
                 continue
-            mentioned.add(name_lower)
+            name = str(name).strip()
+            name_lower = name.lower()
+            if name_lower in plant_info:
+                continue  # avoid duplicates
 
-            sci_name = plant.get('scientific_name', '')
-            # Aggregate effects/uses from potential keys
-            uses = []
+            sci_name = plant.get('scientific_name', '').strip()
             uses_data = plant.get('effects') or plant.get('uses') or plant.get('traditional_uses')
+
+            # Normalize uses list
             if isinstance(uses_data, list):
                 uses = [str(u).strip() for u in uses_data if u and str(u).strip()]
             elif isinstance(uses_data, str) and uses_data.strip():
                 uses = [uses_data.strip()]
+            else:
+                uses = []
 
+            plant_info[name_lower] = {
+                'display_name': name,
+                'scientific_name': sci_name,
+                'uses': uses
+            }
 
-            line = f"• **{name}**"
-            if sci_name and str(sci_name).strip():
-                line += f" ({str(sci_name).strip()})"
-            if uses:
-                line += f"\n  *Common Uses/Effects:* {', '.join(uses[:3])}" # Limit uses shown
-            plant_lines.append(line)
+        if not plant_info:
+            return (
+                f"I couldn't find specific medicinal plants listed as primarily growing in the **{region}** region "
+                "after processing."
+            )
 
-        if not plant_lines: # Check if filtering removed all plants
-             return f"I couldn't find specific medicinal plants listed as primarily growing in the **{region}** region in the database after processing."
+        # --- Randomly sample up to 10 plants ---
+        all_plants = list(plant_info.values())
+        sampled_plants = random.sample(all_plants, min(10, len(all_plants)))
 
-        # Format directly instead of using LLM prompt
-        response_parts = []
-        response_parts.append(f"Here are some medicinal plants associated with the **{region.title()}** region based on available data:")
-        response_parts.append("\n**Plants Found:**")
-        response_parts.extend(plant_lines)
-        response_parts.append(f"\n\n**Note:** This list reflects information in the database and may not be exhaustive for the entire {region}. Plant distribution can be complex.")
+        # --- Sort the selected plants alphabetically ---
+        sampled_plants.sort(key=lambda p: p['display_name'].lower())
 
-        # Safety note added globally by enhance_response_with_cautions
-        return "\n".join(response_parts)
+        # --- Build the response ---
+        sections = [
+            f"Here are some medicinal plants associated with the **{region.title()}** region based on available data:",
+            "\n**Plants Found:**"
+        ]
+
+        for plant in sampled_plants:
+            line = f"• **{plant['display_name']}**"
+            if plant['scientific_name']:
+                line += f" (*{plant['scientific_name']}*)"
+            if plant['uses']:
+                line += f"\n  *Common Uses/Effects:* {', '.join(plant['uses'][:3])}\n"
+            sections.append(line)
+
+        # --- Footer note ---
+        sections.append(
+            f"*Note: * Showing randomly selected plants out of {len(all_plants)} available in the database."
+        )
+
+        return "\n".join(sections)
+
 
     def _get_primary_entity(self, entities: Dict[str, List[str]], priority: List[str]) -> Optional[str]:
          """Helper to get the first entity found based on a priority list."""
