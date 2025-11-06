@@ -17,8 +17,12 @@ from .cypher_templates import CYPHER_TEMPLATES
 # from knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
 # Assuming it's in the same directory for now:
 from nlp.knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
-from nlp.plants_list import plants, compounds, regions, conditions
-
+from nlp.plants_list import plants, compounds, regions, conditions, common_names, scientific_names
+from nlp.keyword_lists import (
+    safety_info, plant_preparation, similar_plants, condition_plants,
+    plant_effects, compound_effects, plant_compounds, compound_plants,
+    region_plants, general_query
+)
 
 import torch.nn as nn
 import nltk
@@ -199,7 +203,7 @@ class BertProcessor:
         # Set list of conditions
         self.base_conditions = set(conditions)
         # Set list of plants
-        self.base_plants = set(plants)
+        self.base_plants = set(plants).union(common_names).union(scientific_names)
         # Set list of compounds
         self.base_compounds = set(compounds)
         # Set list of regions
@@ -811,7 +815,7 @@ class BertProcessor:
         n-grams, fuzzy matching, and refinement. Returns entities sorted alphabetically.
         Includes prioritization logic (Plant > Compound).
         """
-        entities: Dict[str, Set[str]] = {'plants': set(), 'conditions': set(), 'compounds': set(), 'regions': set()}
+        entities: Dict[str, Set[str]] = {'plants': set(), 'conditions': set(), 'compounds': set(), 'regions': set(), 'keywords':set()}
         if not text or not text.strip():
             logger.warning("Input text is empty, skipping entity extraction.")
             return {k: [] for k in entities} # Return empty lists
@@ -848,15 +852,106 @@ class BertProcessor:
 
         # 3. Perform Fuzzy Matching against known entity lists
         # Ensure we pass sets to fuzzy match
-        matched_plants = self._fuzzy_match(unique_n_grams, self.all_known_plants, threshold=self.fuzzy_match_threshold)
+        matched_plants = self._fuzzy_match(unique_n_grams, self.all_known_plants, threshold=92)
         matched_conditions = self._fuzzy_match(unique_n_grams, self.all_known_conditions, threshold=self.fuzzy_match_threshold)
         matched_compounds = self._fuzzy_match(unique_n_grams, self.all_known_compounds, threshold=self.fuzzy_match_threshold)
-        matched_regions = self._fuzzy_match(unique_n_grams, self.all_known_regions, threshold=self.region_fuzzy_match_threshold)
+        #matched_regions = self._fuzzy_match(unique_n_grams, self.all_known_regions, threshold=self.region_fuzzy_match_threshold)
+        # --- Region Matching (refined logic) ---
+        region_matches = set()
 
+        # Normalize known regions once
+        known_regions_lower = {r.lower().strip() for r in self.all_known_regions}
+        text_lower = clean_text_for_processing.lower()
+
+        # 1️⃣ Direct substring or exact phrase match first
+        for region in known_regions_lower:
+            # exact phrase present
+            if f" {region} " in f" {text_lower} " or text_lower.endswith(region):
+                region_matches.add(region)
+
+        # 2️⃣ Fuzzy match only if not already captured, focusing on multi-word n-grams
+        if not region_matches:
+            for ngram in unique_n_grams:
+                if len(ngram.split()) >= 2:  # avoid single-word like "south"
+                    for region in known_regions_lower:
+                        # require both words appear and high similarity
+                        if all(w in region for w in ngram.split()) and fuzz.ratio(ngram, region) >= 90:
+                            region_matches.add(region)
+
+        # 3️⃣ Optional: context filter (helps ignore stray region words)
+        context_phrases = ("in ", "from ", "grow in ", "native to ", "found in ", "endemic to ", "cultivated in ")
+        if not any(cp in text_lower for cp in context_phrases):
+            # if question doesn’t mention a region context, clear the matches
+            region_matches.clear()
+        # Add final matches
+        entities['regions'].update(sorted(region_matches))     
         entities['plants'].update(matched_plants)
         entities['conditions'].update(matched_conditions)
         entities['compounds'].update(matched_compounds)
-        entities['regions'].update(matched_regions)
+        # entities['regions'].update(matched_regions)
+        
+        # --- Keyword extraction (dynamic and context-aware) ---
+
+        # 1️⃣ Normalize all keyword lists from keyword_lists.py
+        keyword_lists = {
+            "safety_info": set(s.lower().strip() for s in safety_info),
+            "plant_preparation": set(s.lower().strip() for s in plant_preparation),
+            "similar_plants": set(s.lower().strip() for s in similar_plants),
+            "condition_plants": set(s.lower().strip() for s in condition_plants),
+            "plant_effects": set(s.lower().strip() for s in plant_effects),
+            "compound_effects": set(s.lower().strip() for s in compound_effects),
+            "plant_compounds": set(s.lower().strip() for s in plant_compounds),
+            "compound_plants": set(s.lower().strip() for s in compound_plants),
+            "region_plants": set(s.lower().strip() for s in region_plants),
+            "general_query": set(s.lower().strip() for s in general_query),
+        }
+
+        # 2️⃣ Detect context keywords from user question to narrow relevant lists
+        context_cues = {
+            "safety_info": ["benefits of", "safe", "side effect", "adverse", "risk", "danger", "warning", "precaution", "contraindication", "pregnant", "toxicity"],
+            "plant_preparation": ["prepare", "make", "brew", "tincture", "infuse", "how to use", "recipe", "preparation", "extract", "steep", "boil"],
+            "condition_plants": ["treat", "help", "remedy", "alleviate", "good for", "benefit for", "aid for", "plants for", "herbs for"],
+            "plant_effects": ["effects of", "benefits of", "properties of", "what does", "therapeutic effect", "pharmacological effect", "impact on", "action of"],
+            "compound_effects": ["effects of", "benefits of", "properties of", "mechanism of action", "pharmacological activity", "how does", "what does", "biological activity", "chemical action", "mode of action", "metabolic effect"],
+            "compound_plants": ["contain", "contains", "found in", "source of", "which plants have", "what plants contain", "derived from", "plant source"],
+            "plant_compounds": ["compound", "ingredient", "chemical", "active ingredient", "phytochemical", "constituent", "bioactive", "what compounds", "compounds in"],
+            "region_plants": ["grow", "found in", "native to", "region", "area", "habitat", "from", "cultivated in", "endemic to"],
+            "similar_plants": ["similar", "alternative", "related", "compare", "vs", "versus", "like", "same family"],
+            "general_query": ["what is", "define", "describe", "tell me about", "information about", "overview of", "meaning of"]
+        }
+
+        # Get lowercase question text
+        question_lower = text.lower()
+
+        # Pick only keyword categories that are relevant for this question
+        relevant_cats = set()
+        for cat, cues in context_cues.items():
+            if any(cue in question_lower for cue in cues):
+                relevant_cats.add(cat)
+
+        # If none matched, default to general query
+        if not relevant_cats:
+            relevant_cats = {"general_query"}
+
+        # 3️⃣ Fuzzy matching logic
+        def fuzzy_match_keywords(ngrams, known_keywords, threshold=85):
+            matches = set()
+            for ngram in ngrams:
+                for kw in known_keywords:
+                    if ngram == kw:
+                        matches.add(kw)
+                    elif (kw in ngram or ngram in kw) and len(kw.split()) <= 3:
+                        matches.add(kw)
+                    elif fuzz.ratio(ngram, kw) >= threshold:
+                        matches.add(kw)
+            return matches
+
+        # 4️⃣ Collect matches only from relevant lists
+        for subcat in relevant_cats:
+            kw_set = keyword_lists[subcat]
+            matched_kws = fuzzy_match_keywords(unique_n_grams, kw_set, threshold=88)
+            for kw in matched_kws:
+                entities["keywords"].add(kw)
 
         # 4. Handle Specific Known Variations / Overrides (if fuzzy match misses)
         # Example: Ensure 'St. John's Wort' variations map correctly if needed
@@ -1067,17 +1162,18 @@ class BertProcessor:
 
         # --- Define Keywords for Intents ---
         intent_keywords = {
-            "safety_info": {"safe", "safety", "side effect", "adverse", "risk", "danger", "precaution", "contraindication", "interaction", "pregnant", "nursing", "warning", "caution"},
-            "plant_preparation": {"prepare", "preparation", "make", "brew", "infuse", "extract", "how to use", "recipe for", "decoction", "tincture", "infusion", "poultice"},
-            "similar_plants": {"similar to", "like", "related to", "alternative to", "alternatives to", "substitute for", "compare to", "vs", "versus"},
-            "condition_plants": {"help with", "good for", "treat", "remedy for", "alleviate", "plants for", "herbs for", "benefit for", "aid for"}, # General condition keywords
-            "plant_effects": {"effects of", "benefits of", "properties of", "what does .* do"}, # Keywords for plant effects
-            "compound_effects": {"effects of compound", "compound .* effects", "properties of compound"}, # Keywords specific to compound effects
-            "plant_compounds": {"compounds in", "what compounds", "active ingredients in", "contains", "chemicals in"}, # For plants
-            "compound_plants": {"plants with", "which plants have", "source of", "find .* in", "plant source"}, # For compounds
-            "region_plants": {"grow in", "found in", "native to", "from", "region", "area", "location"},
-            "general_query": {"what is a", "define", "meaning of", "explain"},
+            "safety_info": set(safety_info),
+            "plant_preparation": set(plant_preparation),
+            "similar_plants": set(similar_plants),
+            "condition_plants": set(condition_plants),
+            "plant_effects": set(plant_effects),
+            "compound_effects": set(compound_effects),
+            "plant_compounds": set(plant_compounds),
+            "compound_plants": set(compound_plants),
+            "region_plants": set(region_plants),
+            "general_query": set(general_query),
         }
+        
         # Helper to check keywords
         def check_kws(intent_key):
              return any(kw in q_lower for kw in intent_keywords.get(intent_key, set()))
@@ -1285,9 +1381,7 @@ class BertProcessor:
         extraction_result = self.extract_entities_and_intent(question)
         intent = extraction_result['intent']  
         entities = extraction_result['entities'] # This is now Dict[str, List[str]]
-        
-        #entities['plants'] = ["turmeric"] #test to force entity
-        
+                
         parameters = {}
         query_info = {'intent': intent, 'query': None, 'parameters': parameters}
         logger.debug(f"Building query for intent '{intent}' with entities: {entities}")
