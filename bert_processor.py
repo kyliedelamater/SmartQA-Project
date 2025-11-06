@@ -17,7 +17,6 @@ from .cypher_templates import CYPHER_TEMPLATES
 # from knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
 # Assuming it's in the same directory for now:
 from nlp.knowledge_graph_entity_linker import KnowledgeGraphEntityLinker
-from nlp.plants_list import plants, compounds, regions, conditions
 
 
 import torch.nn as nn
@@ -195,15 +194,13 @@ class BertProcessor:
     def _initialize_entity_lists(self):
         """Initializes base entity lists and KG-related attributes."""
         logger.debug("Initializing base entity lists.")
-        """The following are stored in SmartQA/nlp/plants_list.py"""
-        # Set list of conditions
-        self.base_conditions = set(conditions)
-        # Set list of plants
-        self.base_plants = set(plants)
-        # Set list of compounds
-        self.base_compounds = set(compounds)
-        # Set list of regions
-        self.base_regions = set(regions)
+        # Base lists provide a fallback if KG loading fails
+        self.base_conditions = {'inflammation', 'pain', 'arthritis', 'anxiety', 'insomnia', 'diabetes', 'depression', 'hypertension', 'infection', 'stress', 'digestive issues', 'digestion', 'respiratory problems', 'immune support', 'cold', 'flu', 'headache', 'migraine', 'nausea', 'vomiting', 'burns', 'wounds', 'cuts', 'joint pain', 'eczema', 'psoriasis', 'allergies', 'fatigue', 'memory issues', 'cough', 'fever', 'cystitis', 'diarrhea', 'constipation', 'spasm', 'ulcer', 'catarrh', 'indigestion', 'dyspepsia', 'swelling', 'ache', 'sleep disorder', 'stomach issues', 'high blood pressure', 'skin conditions', 'mood disorder', 'nerve pain'}
+        # Added 'ginger' and canonical 'st. john's wort'
+        self.base_plants = {'ginger', 'turmeric', 'garlic', 'echinacea', 'ginseng', 'aloe vera', 'chamomile', 'lavender', 'peppermint', 'valerian', "st. john's wort", 'milk thistle', 'ginkgo biloba', 'holy basil', 'ashwagandha', 'maca', 'elderberry', 'calendula', 'arnica', 'passionflower', 'lemon balm', 'kava', 'rosemary', 'thyme', 'sage', 'oregano', 'cinnamon', 'nettle', 'boldo', 'dandelion', 'burdock', 'licorice root', 'yarrow', 'feverfew', 'gotu kola', 'devil\'s claw', 'boswellia', 'cat\'s claw', 'balm of gilead'}
+        # Ensure 'gingerol' is here, not in plants
+        self.base_compounds = {'curcumin', 'allicin', 'gingerol', 'menthol', 'quercetin', 'hypericin', 'anthocyanins', 'polyphenols', 'alkaloids', 'flavonoids', 'tannins', 'terpenes', 'saponins', 'berberine', 'silymarin', 'salicylic acid', 'ginkgolides', 'apigenin', 'chamazulene', 'eugenol', 'thymol', 'curcuminoids', 'glycosides', 'acids', 'sterols', 'volatile oil', 'essential oil', 'lignans', 'resins', 'mucilage', 'oleanolic acid', 'ursolic acid'}
+        self.base_regions = {'europe', 'asia', 'africa', 'north america', 'south america', 'central america', 'mediterranean', 'india', 'china', 'amazon', 'andes', 'himalayas', 'australia', 'middle east', 'southeast asia', 'siberia', 'japan', 'korea', 'arabian peninsula', 'andean region'}
 
         # Initialize KG-related attributes (will be populated by _load_kg_data)
         self.entity_to_idx: Dict[str, int] = {}
@@ -1286,7 +1283,7 @@ class BertProcessor:
         intent = extraction_result['intent']  
         entities = extraction_result['entities'] # This is now Dict[str, List[str]]
         
-        #entities['plants'] = ["turmeric"] #test to force entity
+        entities['plants'] = ["turmeric"]
         
         parameters = {}
         query_info = {'intent': intent, 'query': None, 'parameters': parameters}
