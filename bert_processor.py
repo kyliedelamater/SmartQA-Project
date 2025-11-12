@@ -715,7 +715,7 @@ class BertProcessor:
             return ''
         normalized = term.lower().strip()
         # Remove possessive 's
-        normalized = re.sub(r"['’]s$", "", normalized)
+        normalized = re.sub(r"[`']s$", "", normalized)
 
         # --- Specific Normalization Rules ---
         # Canonical form for St. John's Wort (ensure this matches DB population)
@@ -863,13 +863,13 @@ class BertProcessor:
         known_regions_lower = {r.lower().strip() for r in self.all_known_regions}
         text_lower = clean_text_for_processing.lower()
 
-        # 1️⃣ Direct substring or exact phrase match first
+        # 1?? Direct substring or exact phrase match first
         for region in known_regions_lower:
             # exact phrase present
             if f" {region} " in f" {text_lower} " or text_lower.endswith(region):
                 region_matches.add(region)
 
-        # 2️⃣ Fuzzy match only if not already captured, focusing on multi-word n-grams
+        # 2?? Fuzzy match only if not already captured, focusing on multi-word n-grams
         if not region_matches:
             for ngram in unique_n_grams:
                 if len(ngram.split()) >= 2:  # avoid single-word like "south"
@@ -878,7 +878,7 @@ class BertProcessor:
                         if all(w in region for w in ngram.split()) and fuzz.ratio(ngram, region) >= 90:
                             region_matches.add(region)
 
-        # 3️⃣ Optional: context filter (helps ignore stray region words)
+        # 3?? Optional: context filter (helps ignore stray region words)
         context_phrases = ("in ", "from ", "grow in ", "native to ", "found in ", "endemic to ", "cultivated in ")
         if not any(cp in text_lower for cp in context_phrases):
             # if question doesn’t mention a region context, clear the matches
@@ -892,7 +892,7 @@ class BertProcessor:
         
         # --- Keyword extraction (dynamic and context-aware) ---
 
-        # 1️⃣ Normalize all keyword lists from keyword_lists.py
+        # 1?? Normalize all keyword lists from keyword_lists.py
         keyword_lists = {
             "safety_info": set(s.lower().strip() for s in safety_info),
             "plant_preparation": set(s.lower().strip() for s in plant_preparation),
@@ -906,7 +906,7 @@ class BertProcessor:
             "general_query": set(s.lower().strip() for s in general_query),
         }
 
-        # 2️⃣ Detect context keywords from user question to narrow relevant lists
+        # 2?? Detect context keywords from user question to narrow relevant lists
         context_cues = {
             "safety_info": ["benefits of", "safe", "side effect", "adverse", "risk", "danger", "warning", "precaution", "contraindication", "pregnant", "toxicity"],
             "plant_preparation": ["prepare", "make", "brew", "tincture", "infuse", "how to use", "recipe", "preparation", "extract", "steep", "boil"],
@@ -933,7 +933,7 @@ class BertProcessor:
         if not relevant_cats:
             relevant_cats = {"general_query"}
 
-        # 3️⃣ Fuzzy matching logic
+        # 3?? Fuzzy matching logic
         def fuzzy_match_keywords(ngrams, known_keywords, threshold=85):
             matches = set()
             for ngram in ngrams:
@@ -946,7 +946,7 @@ class BertProcessor:
                         matches.add(kw)
             return matches
 
-        # 4️⃣ Collect matches only from relevant lists
+        # 4?? Collect matches only from relevant lists
         for subcat in relevant_cats:
             kw_set = keyword_lists[subcat]
             matched_kws = fuzzy_match_keywords(unique_n_grams, kw_set, threshold=88)
@@ -1318,7 +1318,7 @@ class BertProcessor:
             'valerian': ['valeriana officinalis', 'valerian root', 'garden heliotrope'],
             'passionflower': ['passiflora incarnata', 'maypop', 'passion flower'],
             "devil's claw": ['harpagophytum procumbens', 'grapple plant', 'wood spider'],
-            "cat's claw": ['uncaria tomentosa', 'uña de gato'],
+            "cat's claw": ['uncaria tomentosa', 'una de gato'],
             'kava': ['piper methysticum', 'kava kava'],
             'ashwagandha': ['withania somnifera', 'indian ginseng', 'winter cherry'],
             # Compounds
@@ -1725,20 +1725,20 @@ class BertProcessor:
 
         query_clean = re.sub(r'\W+', ' ', query.lower()).strip()
     
-    # 1️⃣ Check synonyms first (quick exact match)
+    # 1?? Check synonyms first (quick exact match)
         if plant_synonyms:
             for plant, syns in plant_synonyms.items():
                 all_names = [plant.lower()] + [s.lower() for s in syns]
                 if any(n in query_clean for n in all_names):
                     return plant
 
-    # 2️⃣ Exact match in canonical names
+    # 2?? Exact match in canonical names
         for plant in all_plants:
             plant_clean = re.sub(r'\W+', ' ', plant.lower()).strip()
             if plant_clean in query_clean or query_clean in plant_clean:
                 return plant
 
-    # 3️⃣ Fuzzy match using BERT embeddings
+    # 3?? Fuzzy match using BERT embeddings
         try:
             query_emb = self.bert_model.encode(query, convert_to_tensor=True)
             plant_embs = self.bert_model.encode(all_plants, convert_to_tensor=True)
@@ -1750,7 +1750,7 @@ class BertProcessor:
         except Exception as e:
             logger.warning(f"BERT fuzzy matching failed: {e}")
 
-    # 4️⃣ No match found
+    # 4?? No match found
         return None
 
     def get_answer_confidence(self, question: str, answer: str) -> float:
