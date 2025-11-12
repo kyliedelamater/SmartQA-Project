@@ -85,7 +85,7 @@ class FlanT5Processor:
     def _register_decision_table(self) -> None:
         """Map high-level intents to the existing formatter methods."""
         self._intent_handlers = {
-            # exact â†’ single-entity formatters
+            # exact Ã¢â€ â€™ single-entity formatters
             "plant_info":                  lambda entities, rows: self.format_plant_info(
                                             plant_data=(rows[0] if rows else {}), entities=entities),
             "safety_info":                 lambda entities, rows: self.format_safety_info(
@@ -153,7 +153,7 @@ class FlanT5Processor:
             # Heuristic starter: use response length as a proxy
             # (Replace this later with real sequence log-prob.)
             L = max(1, len(response.split()))
-            # Map length to a pseudo logprob; longer â†’ less negative â†’ higher normalized score
+            # Map length to a pseudo logprob; longer Ã¢â€ â€™ less negative Ã¢â€ â€™ higher normalized score
             # e.g., -6.0 .. -2.0
             approx = -6.0 + min(4.0, L / 50.0 * 4.0)
             return approx
@@ -169,7 +169,7 @@ class FlanT5Processor:
         """
         handler = getattr(self, "_intent_handlers", {}).get(intent)
         if not handler:
-            # Unknown intent â†’ helpful fallback
+            # Unknown intent Ã¢â€ â€™ helpful fallback
             text = self.generate_general_explanation(intent or "unknown", entities or {}, len(rows or []))
         else:
             text = handler(entities or {}, rows or [])
@@ -260,7 +260,7 @@ class FlanT5Processor:
         if response:
             response = response[0].upper() + response[1:]
         # Ensure consistent line breaks before bullet points if any exist
-        response = re.sub(r'\s*•\s*', r'\n• ', response)
+        response = re.sub(r'\s*â€¢\s*', r'\nâ€¢ ', response)
         response = re.sub(r'\s*-\s*', r'\n- ', response) # Also handle hyphens as bullets
         return response.strip() # Remove leading/trailing whitespace again
 
@@ -336,9 +336,9 @@ class FlanT5Processor:
 
         if len(cleaned_items) > max_items:
             display_items = cleaned_items[:max_items]
-            return "\n".join(f"• {item.capitalize()}" for item in display_items) + f"\n• ... (and {len(cleaned_items) - max_items} more)"
+            return "\n".join(f"â€¢ {item.capitalize()}" for item in display_items) + f"\nâ€¢ ... (and {len(cleaned_items) - max_items} more)"
         else:
-            return "\n".join(f"• {item.capitalize()}" for item in cleaned_items)
+            return "\n".join(f"â€¢ {item.capitalize()}" for item in cleaned_items)
 
     #kylie added
     def _format_list_capitalize(self, items: List[str]) -> str:
@@ -430,7 +430,7 @@ class FlanT5Processor:
             if desc_parts:
                 sections.append("\n".join(desc_parts))
 
-            # --- Info sections defined as label → data mapping ---
+            # --- Info sections defined as label â†’ data mapping ---
             info_map = {
                 "Medicinal Properties & Effects": effects,
                 "Traditional Uses": traditional_uses,
@@ -529,7 +529,7 @@ class FlanT5Processor:
 
             selected_plants.sort(key=lambda p: p['name'])
             for plant in selected_plants:
-                plant_text = f"• **{plant['name']}**"
+                plant_text = f"â€¢ **{plant['name']}**"
                 if plant['scientific_name']: plant_text += f" (*{plant['scientific_name']}*)\n"
                 #if plant['effects_sample']: plant_text += f"\n  Known effects include: {', '.join(plant['effects_sample'])}"
                 sections.append(plant_text)
@@ -542,17 +542,17 @@ class FlanT5Processor:
              # Sort alphabetically by name
             for name in sorted(supportive_plants.keys()):
                 plant = supportive_plants[name]
-                plant_text = f"\n• **{plant['name']}**"
+                plant_text = f"\nâ€¢ **{plant['name']}**"
                 if plant['scientific_name']: plant_text += f" ({plant['scientific_name']})"
                 if plant['effects_sample']: plant_text += f"\n  Related benefits may include: {', '.join(plant['effects_sample'])}"
                 sections.append(plant_text)
 
         # Usage guidelines (General)
         guidelines = "\n**General Usage Considerations:**"
-        guidelines += "\n• Effectiveness can vary based on the plant part used, preparation, dosage, and individual factors."
-        guidelines += "\n• Start with a single plant and a low dose to assess your response."
-        guidelines += "\n• Follow traditional or expert-recommended preparation methods."
-        guidelines += "\n• Ensure proper identification and use high-quality plant sources."
+        guidelines += "\nâ€¢ Effectiveness can vary based on the plant part used, preparation, dosage, and individual factors."
+        guidelines += "\nâ€¢ Start with a single plant and a low dose to assess your response."
+        guidelines += "\nâ€¢ Follow traditional or expert-recommended preparation methods."
+        guidelines += "\nâ€¢ Ensure proper identification and use high-quality plant sources."
         #sections.append(guidelines)
 
         # Safety note is added globally by enhance_response_with_cautions
@@ -629,7 +629,7 @@ class FlanT5Processor:
             selected_plants.sort(key=lambda item: item[0])
 
             for name, info in selected_plants:
-                line = f"• **{name}**"
+                line = f"â€¢ **{name}**"
                 if info['scientific_name']: line += f" ({info['scientific_name']})"
                 # Show effects relevant to the condition first, then others
                 matched_effects = sorted([e for e in info['effects'] if any(cond_syn in e.lower() for cond_syn in synonyms)])
@@ -643,16 +643,16 @@ class FlanT5Processor:
 
         # Regional context (simplified)
         context = f"\n**Context for {region}:**"
-        context += "\n• Traditional knowledge in this region often guides the specific use and preparation of these plants."
-        context += "\n• Local environmental factors can influence the potency and characteristics of plants."
-        context += "\n• Sustainable harvesting is important to preserve these resources."
+        context += "\nâ€¢ Traditional knowledge in this region often guides the specific use and preparation of these plants."
+        context += "\nâ€¢ Local environmental factors can influence the potency and characteristics of plants."
+        context += "\nâ€¢ Sustainable harvesting is important to preserve these resources."
         sections.append(context)
 
         # Considerations (General)
         considerations = "\n**Important Considerations:**"
-        considerations += "\n• This information is based on available data; local practices may vary."
-        considerations += "\n• Always ensure correct plant identification."
-        considerations += "\n• Preparation methods significantly impact effectiveness and safety."
+        considerations += "\nâ€¢ This information is based on available data; local practices may vary."
+        considerations += "\nâ€¢ Always ensure correct plant identification."
+        considerations += "\nâ€¢ Preparation methods significantly impact effectiveness and safety."
         sections.append(considerations)
 
         # Safety note added globally
@@ -700,7 +700,7 @@ class FlanT5Processor:
             if side_effects:
                 formatted = self._format_list_bullets([self._clean_sentence(s) for s in side_effects])
             else:
-                formatted = "• No specific side effects listed, but caution is advised."
+                formatted = "â€¢ No specific side effects listed, but caution is advised."
             sections.append(f"{header}\n{formatted}")
 
         # --- Interactions ---
@@ -709,7 +709,7 @@ class FlanT5Processor:
             if interactions:
                 formatted = self._format_list_bullets([self._clean_sentence(i) for i in interactions])
             else:
-                formatted = "• No known interactions recorded, but consult a healthcare provider before combining with medications."
+                formatted = "â€¢ No known interactions recorded, but consult a healthcare provider before combining with medications."
             sections.append(f"{header}\n{formatted}")
 
         # --- Contraindications ---
@@ -718,7 +718,7 @@ class FlanT5Processor:
             if contraindications:
                 formatted = self._format_list_bullets([self._clean_sentence(c) for c in contraindications])
             else:
-                formatted = "• No specific contraindications listed, but use caution during pregnancy, nursing, or with chronic conditions."
+                formatted = "â€¢ No specific contraindications listed, but use caution during pregnancy, nursing, or with chronic conditions."
             sections.append(f"{header}\n{formatted}")
 
         # --- If no sections built ---
@@ -771,9 +771,9 @@ class FlanT5Processor:
 
         # Scientific context / How it works (General statements)
         science = f"\n**Understanding {compound_name_display.capitalize()}'s Role:**"
-        science += f"\n• The effects of {compound_name_display.title()} often result from synergy with other compounds in the plant."
-        science += "\n• Its concentration and bioavailability can vary significantly based on the plant source, part used, and preparation method."
-        science += "\n• Research is ongoing to fully understand its mechanisms of action."
+        science += f"\nâ€¢ The effects of {compound_name_display.title()} often result from synergy with other compounds in the plant."
+        science += "\nâ€¢ Its concentration and bioavailability can vary significantly based on the plant source, part used, and preparation method."
+        science += "\nâ€¢ Research is ongoing to fully understand its mechanisms of action."
         sections.append(science)
 
         # Research insights (If available)
@@ -786,9 +786,9 @@ class FlanT5Processor:
 
         # Practical considerations
         practical = "\n**Practical Considerations:**"
-        practical += f"\n• The amount of {compound_name_display.title()} can differ greatly between plant batches and preparations."
-        practical += "\n• Extraction methods (e.g., water, alcohol, oil) influence which compounds are present in the final product."
-        practical += "\n• Consider the plant source as a whole, not just the isolated compound, for traditional use."
+        practical += f"\nâ€¢ The amount of {compound_name_display.title()} can differ greatly between plant batches and preparations."
+        practical += "\nâ€¢ Extraction methods (e.g., water, alcohol, oil) influence which compounds are present in the final product."
+        practical += "\nâ€¢ Consider the plant source as a whole, not just the isolated compound, for traditional use."
         sections.append(practical)
 
         # Safety note added globally
@@ -868,7 +868,7 @@ class FlanT5Processor:
 
         for name in sorted(plant_details.keys()):
             details = plant_details[name]
-            line = f"• {name}"
+            line = f"â€¢ {name}"
             sections.append(line)
 
         return "\n".join(sections)
@@ -904,11 +904,11 @@ class FlanT5Processor:
 
         # Add suggestions regardless of the specific case above
         response += "\n\nTo help me find what you need, you could try asking about:"
-        response += "\n• A specific plant's properties (e.g., 'What are the benefits of Ginger?')"
-        response += "\n• Plants for a specific condition (e.g., 'Which herbs help with headaches?')"
-        response += "\n• Safety information for a plant (e.g., 'Is St. John's Wort safe?')"
-        response += "\n• Preparation methods (e.g., 'How to prepare Echinacea tea?')"
-        response += "\n• Plants from a specific region (e.g., 'Medicinal plants from the Andes')"
+        response += "\nâ€¢ A specific plant's properties (e.g., 'What are the benefits of Ginger?')"
+        response += "\nâ€¢ Plants for a specific condition (e.g., 'Which herbs help with headaches?')"
+        response += "\nâ€¢ Safety information for a plant (e.g., 'Is St. John's Wort safe?')"
+        response += "\nâ€¢ Preparation methods (e.g., 'How to prepare Echinacea tea?')"
+        response += "\nâ€¢ Plants from a specific region (e.g., 'Medicinal plants from the Andes')"
 
         # Safety note added globally
 
@@ -953,7 +953,7 @@ class FlanT5Processor:
 
         sections.append("\n**Similar Plants:**")
         for name, info in display_plants:
-            line = f"• **{name}**"
+            line = f"â€¢ **{name}**"
             if info['scientific_name']: line += f" (*{info['scientific_name']}*)"
             if info['shared_effects']:
                 line += f"\n  *Shared Effects Include:* {', '.join(info['shared_effects'][:3])}\n" # Limit displayed effects
@@ -962,16 +962,16 @@ class FlanT5Processor:
 
         # Important differences
         differences = "\n**Important Differences to Consider:**"
-        differences += f"\n• While sharing some effects, these plants have unique chemical profiles and other distinct properties not shared with {target_plant.title()}."
-        differences += "\n• Potency, optimal preparation methods, and safety profiles (side effects, interactions) can differ significantly."
-        differences += "\n• Traditional uses might vary even if some effects overlap."
+        differences += f"\nâ€¢ While sharing some effects, these plants have unique chemical profiles and other distinct properties not shared with {target_plant.title()}."
+        differences += "\nâ€¢ Potency, optimal preparation methods, and safety profiles (side effects, interactions) can differ significantly."
+        differences += "\nâ€¢ Traditional uses might vary even if some effects overlap."
        # sections.append(differences)
 
         # Selection guidelines
         guidelines = f"\n**Guidelines for Choosing:**"
-        guidelines += "\n• Base your choice on your specific health goals and the *full* profile of the plant, not just the overlap."
-        guidelines += "\n• Consider availability, ease of preparation, and your individual sensitivities."
-        guidelines += f"\n• Research each plant individually, including its specific safety information, before use."
+        guidelines += "\nâ€¢ Base your choice on your specific health goals and the *full* profile of the plant, not just the overlap."
+        guidelines += "\nâ€¢ Consider availability, ease of preparation, and your individual sensitivities."
+        guidelines += f"\nâ€¢ Research each plant individually, including its specific safety information, before use."
         #sections.append(guidelines)
 
         # Safety note added globally
@@ -1026,7 +1026,7 @@ class FlanT5Processor:
 
         for method_name in sorted(methods.keys()):
             details = methods[method_name]
-            line = f"• {method_name.capitalize()}"
+            line = f"â€¢ {method_name.capitalize()}"
             if details['description'] and str(details['description']).strip():
                  line += f": {str(details['description']).strip()}"
             # Display example plants if available
@@ -1039,18 +1039,18 @@ class FlanT5Processor:
 
         # Key Factors
         quality = "\n**Key Factors for Preparation:**"
-        quality += "\n• **Plant Material:** Use high-quality, correctly identified plants from a reliable source."
-        quality += "\n• **Plant Part:** Different parts (root, leaf, flower) often require different methods."
-        quality += "\n• **Solvent:** Water, alcohol, oil, or vinegar extract different compounds."
-        quality += "\n• **Technique:** Proper temperature, timing, and equipment are crucial."
-        quality += "\n• **Storage:** Store preparations correctly (e.g., cool, dark place) to maintain potency."
+        quality += "\nâ€¢ **Plant Material:** Use high-quality, correctly identified plants from a reliable source."
+        quality += "\nâ€¢ **Plant Part:** Different parts (root, leaf, flower) often require different methods."
+        quality += "\nâ€¢ **Solvent:** Water, alcohol, oil, or vinegar extract different compounds."
+        quality += "\nâ€¢ **Technique:** Proper temperature, timing, and equipment are crucial."
+        quality += "\nâ€¢ **Storage:** Store preparations correctly (e.g., cool, dark place) to maintain potency."
         sections.append(quality)
 
         # Method Selection (General advice)
         selection = "\n**Choosing the Right Method:**"
-        selection += "\n• The best method depends on the specific plant, the desired effects, and the compounds being targeted."
-        selection += "\n• Infusions (teas) are common for leaves and flowers; decoctions (simmering) for roots and barks; tinctures (alcohol extraction) for broader compound extraction."
-        selection += "\n• Consult reliable herbal resources or practitioners for guidance specific to the plant or condition."
+        selection += "\nâ€¢ The best method depends on the specific plant, the desired effects, and the compounds being targeted."
+        selection += "\nâ€¢ Infusions (teas) are common for leaves and flowers; decoctions (simmering) for roots and barks; tinctures (alcohol extraction) for broader compound extraction."
+        selection += "\nâ€¢ Consult reliable herbal resources or practitioners for guidance specific to the plant or condition."
         #sections.append(selection)
 
         # Safety note added globally
@@ -1111,7 +1111,7 @@ class FlanT5Processor:
 
              if relevant_conditions_matched: # Only list plants that match at least one condition
                  found_plants = True
-                 line = f"\n• **{name}**"
+                 line = f"\nâ€¢ **{name}**"
                  if info['scientific_name']: line += f" ({info['scientific_name']})"
                  line += f"\n  *Relevant Conditions Addressed:* {', '.join(sorted(list(relevant_conditions_matched)))}"
                  # Optionally list a few general effects
@@ -1147,7 +1147,7 @@ class FlanT5Processor:
             found_compounds = True
 
             effects = [e for e in compound_info.get('associated_effects', []) if e and str(e).strip()]
-            line = f"• **{cname.title()}**"
+            line = f"â€¢ **{cname.title()}**"
             if effects:
                 line += f"\n  *Associated Effects:* {self._format_list(effects[:3])}\n" # Limit effects shown
             else:
@@ -1241,7 +1241,7 @@ class FlanT5Processor:
         ]
 
         for plant in sampled_plants:
-            line = f"• **{plant['display_name']}**"
+            line = f"â€¢ **{plant['display_name']}**"
             if plant['scientific_name']:
                 line += f" (*{plant['scientific_name']}*)"
             if plant['uses']:
